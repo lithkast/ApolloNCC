@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using ApolloNCC.Api;
 using Dalamud.Game.ClientState.Objects.SubKinds;
 using Dalamud.Game.Text.SeStringHandling;
@@ -8,7 +9,7 @@ namespace ApolloNCC.Services;
 
 /// <summary>
 /// Watches for things staff need to be told about straight away: a booking running out,
-/// or a blacklisted patron nearby. Runs on the framework thread.
+/// or a blacklisted player nearby. Runs on the framework thread.
 /// </summary>
 public sealed class Alerts
 {
@@ -18,6 +19,9 @@ public sealed class Alerts
     private static readonly TimeSpan ScanInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan RepeatAfter = TimeSpan.FromMinutes(10);
 
+    // A booking that ran out longer ago than this is old news (the rows stay on the page all night).
+    private static readonly TimeSpan TimeUpWindow = TimeSpan.FromMinutes(5);
+
     private readonly Configuration config;
     private readonly ApolloState state;
     private readonly HashSet<string> timeUpAnnounced = [];
@@ -25,9 +29,8 @@ public sealed class Alerts
     private readonly Dictionary<string, DateTimeOffset> lastSeen = new(StringComparer.OrdinalIgnoreCase);
 
     private DateTimeOffset nextScan = DateTimeOffset.MinValue;
-    private IReadOnlyList<BlacklistEntry>? indexedFrom;
-    private Dictionary<string, BlacklistEntry> byNameAndWorld = new(StringComparer.OrdinalIgnoreCase);
-    private Dictionary<string, BlacklistEntry> byNameOnly = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<Ban>? indexedFrom;
+    private ILookup<string, Ban> byPlayer = Array.Empty<Ban>().ToLookup(b => b.Player);
     private bool sightingsPrimed;
 
     public Alerts(Configuration config, ApolloState state)
@@ -36,26 +39,21 @@ public sealed class Alerts
         this.state = state;
     }
 
-    public void Reset()
-    {
-        this.timeUpAnnounced.Clear();
-        this.sightingsAnnounced.Clear();
-        this.lastSeen.Clear();
-        this.sightingsPrimed = false;
-    }
-
     public void Tick(DateTimeOffset now)
     {
-        var profile = this.state.Profile;
-        if (profile == null || !Plugin.ClientState.IsLoggedIn)
+        var access = this.state.Access;
+        if (access is not { IsStaff: true } || !Plugin.ClientState.IsLoggedIn)
+        {
+            this.sightingsPrimed = false;
             return;
+        }
 
         if (this.config.BookingTimeUpAlerts)
             this.CheckBookings(now);
 
-        if (this.config.BannedPatronAlerts && profile.CanUseSecurityTools())
+        if (this.config.BannedPatronAlerts && access.IsSecurity)
         {
-            this.CheckSightings(profile);
+            this.CheckSightings(access);
             if (now >= this.nextScan)
             {
                 this.nextScan = now + ScanInterval;
@@ -64,29 +62,37 @@ public sealed class Alerts
         }
     }
 
-    public BlacklistEntry? Match(string name, string? world)
+    /// <summary>The blacklist entry for a player, if there is one. An entry without a world matches any world.</summary>
+    public Ban? Match(string name, string? world)
     {
-        this.Reindex();
-        if (world != null && this.byNameAndWorld.TryGetValue($"{name}@{world}", out var exact))
-            return exact;
-        return this.byNameOnly.GetValueOrDefault(name);
+        var list = this.state.Bans;
+        if (!ReferenceEquals(list, this.indexedFrom))
+        {
+            this.byPlayer = list.ToLookup(b => b.Player, StringComparer.OrdinalIgnoreCase);
+            this.indexedFrom = list;
+        }
+
+        return this.byPlayer[name.Trim()].FirstOrDefault(b =>
+            b.World.Length == 0 || string.IsNullOrEmpty(world) || string.Equals(b.World, world, StringComparison.OrdinalIgnoreCase));
     }
 
     private void CheckBookings(DateTimeOffset now)
     {
         foreach (var booking in this.state.MyBookings)
         {
-            if (booking.EndsAt > now || !this.timeUpAnnounced.Add(booking.Id))
+            if (booking.EndsAt is not { } end || end > now || now - end > TimeUpWindow || !this.timeUpAnnounced.Add(booking.Id))
                 continue;
 
-            var text = $"Time is up for {booking.ClientName} in {booking.Room}.";
+            var who = booking.Patron.Length > 0 ? $" with {booking.Patron}" : "";
+            var where = booking.Location.Length > 0 ? $" in {booking.Location}" : "";
+            var text = $"Time is up{who}{where}.";
             Plugin.ToastGui.ShowQuest(text);
             Print(text, Gold);
         }
     }
 
-    /// <summary>Banned patrons reported by other staff, so everyone on security hears about it.</summary>
-    private void CheckSightings(Profile profile)
+    /// <summary>Banned players reported by other staff's plugins, so everyone on security hears about it.</summary>
+    private void CheckSightings(Access access)
     {
         var sightings = this.state.Sightings;
 
@@ -101,18 +107,14 @@ public sealed class Alerts
 
         foreach (var s in sightings)
         {
-            if (!this.sightingsAnnounced.Add(s.Id) ||
-                string.Equals(s.ReportedBy, profile.Name, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            Announce(s.Name, s.World, s.Reason, $"spotted by {s.ReportedBy}");
+            if (this.sightingsAnnounced.Add(s.Id) && s.ByUid != access.Uid)
+                Announce(s.Name, s.World, s.Ban, $"spotted by {s.By}");
         }
     }
 
     private void ScanNearby(DateTimeOffset now)
     {
-        this.Reindex();
-        if (this.byNameAndWorld.Count == 0 && this.byNameOnly.Count == 0)
+        if (this.state.Bans.Count == 0)
             return;
 
         var self = Plugin.ObjectTable.LocalPlayer;
@@ -122,9 +124,9 @@ public sealed class Alerts
                 continue;
 
             var name = pc.Name.TextValue;
-            var world = pc.HomeWorld.ValueNullable?.Name.ExtractText();
-            var entry = this.Match(name, world);
-            if (entry == null)
+            var world = pc.HomeWorld.ValueNullable?.Name.ExtractText() ?? "";
+            var ban = this.Match(name, world);
+            if (ban == null)
                 continue;
 
             var key = $"{name}@{world}";
@@ -132,37 +134,16 @@ public sealed class Alerts
                 continue;
 
             this.lastSeen[key] = now;
-            Announce(name, world, entry.Reason, "nearby");
-            this.state.ReportSighting(entry, name, world);
+            Announce(name, world, ban.Reason, "nearby");
+            this.state.ReportSighting(ban, name, world);
         }
     }
 
-    private void Reindex()
+    private static void Announce(string name, string world, string reason, string where)
     {
-        var list = this.state.Blacklist;
-        if (ReferenceEquals(list, this.indexedFrom))
-            return;
-
-        var exact = new Dictionary<string, BlacklistEntry>(StringComparer.OrdinalIgnoreCase);
-        var nameOnly = new Dictionary<string, BlacklistEntry>(StringComparer.OrdinalIgnoreCase);
-        foreach (var entry in list)
-        {
-            if (string.IsNullOrWhiteSpace(entry.World))
-                nameOnly[entry.Name.Trim()] = entry;
-            else
-                exact[$"{entry.Name.Trim()}@{entry.World.Trim()}"] = entry;
-        }
-
-        this.byNameAndWorld = exact;
-        this.byNameOnly = nameOnly;
-        this.indexedFrom = list;
-    }
-
-    private static void Announce(string name, string? world, string reason, string where)
-    {
-        var who = world is { Length: > 0 } ? $"{name}@{world}" : name;
+        var who = world.Length > 0 ? $"{name}@{world}" : name;
         Plugin.ToastGui.ShowError($"Banned patron: {who}");
-        Print($"BANNED PATRON {who} ({where}). Reason: {reason}", Red);
+        Print($"BANNED PATRON {who} ({where}).{(reason.Length > 0 ? $" Reason: {reason}" : "")}", Red);
     }
 
     private static void Print(string text, ushort colour) =>

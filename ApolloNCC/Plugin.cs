@@ -19,12 +19,10 @@ public sealed class Plugin : IDalamudPlugin
     private readonly Alerts alerts;
     private readonly MainWindow mainWindow;
 
-    private string? character;
-
     public Plugin()
     {
         this.config = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
-        this.state = new ApolloState(this.config, () => this.character);
+        this.state = new ApolloState(this.config);
         this.alerts = new Alerts(this.config, this.state);
         this.mainWindow = new MainWindow(this.config, this.state, this.alerts);
         this.windows.AddWindow(this.mainWindow);
@@ -64,16 +62,18 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnUpdate(IFramework framework)
     {
-        // Which character is logged in. The web app maps every alt back to the main employee through the plugin key.
-        this.character = PlayerState.IsLoaded
-            ? $"{PlayerState.CharacterName}@{PlayerState.HomeWorld.ValueNullable?.Name.ExtractText()}"
-            : null;
-
         if (!ClientState.IsLoggedIn)
             return;
 
+        // Which character is logged in. The login is the same on every alt; this only tells Reception which
+        // character to send a tell to.
+        (string Name, string World)? character =
+            PlayerState.IsLoaded && PlayerState.HomeWorld.ValueNullable?.Name.ExtractText() is { Length: > 0 } world
+                ? (PlayerState.CharacterName, world)
+                : null;
+
         var now = DateTimeOffset.UtcNow;
-        this.state.Tick(now, this.mainWindow.IsOpen ? this.mainWindow.CurrentView : null);
+        this.state.Tick(now, this.mainWindow.IsOpen ? this.mainWindow.CurrentView : null, character, this.config.BannedPatronAlerts);
         this.alerts.Tick(now);
     }
 

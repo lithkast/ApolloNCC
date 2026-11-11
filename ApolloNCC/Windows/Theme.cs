@@ -6,20 +6,22 @@ using Dalamud.Interface.Utility;
 
 namespace ApolloNCC.Windows;
 
-/// <summary>Apollo's black and gold look, plus the small drawing helpers every tab shares.</summary>
+/// <summary>Apollo's look, taken from the web app, plus the small drawing helpers every tab shares.</summary>
 public static class Theme
 {
-    public static readonly Vector4 Gold = Rgb(0xD4, 0xAF, 0x37);
-    public static readonly Vector4 GoldBright = Rgb(0xF1, 0xD0, 0x6B);
-    public static readonly Vector4 GoldDim = Rgb(0x8C, 0x73, 0x26);
-    public static readonly Vector4 Black = Rgb(0x0A, 0x0A, 0x0C);
-    public static readonly Vector4 Panel = Rgb(0x14, 0x14, 0x17);
-    public static readonly Vector4 PanelRaised = Rgb(0x1E, 0x1D, 0x21);
-    public static readonly Vector4 Text = Rgb(0xEF, 0xE9, 0xD8);
-    public static readonly Vector4 TextMuted = Rgb(0x9A, 0x94, 0x84);
-    public static readonly Vector4 Good = Rgb(0x6F, 0xCF, 0x7F);
-    public static readonly Vector4 Bad = Rgb(0xE5, 0x5B, 0x5B);
-    public static readonly Vector4 Warn = Rgb(0xF0, 0xA0, 0x3C);
+    // The site's dark theme (public/index.html): black, midnight blue panels, gold.
+    public static readonly Vector4 Gold = Rgb(0xE2, 0xB9, 0x5F);
+    public static readonly Vector4 GoldBright = Rgb(0xF2, 0xD4, 0x8C);
+    public static readonly Vector4 GoldDim = Rgb(0x8A, 0x6E, 0x32);
+    public static readonly Vector4 Black = Rgb(0x00, 0x00, 0x00);
+    public static readonly Vector4 Panel = Rgb(0x16, 0x1B, 0x36);
+    public static readonly Vector4 PanelRaised = Rgb(0x1D, 0x23, 0x45);
+    public static readonly Vector4 Line = Rgb(0x2B, 0x32, 0x60);
+    public static readonly Vector4 Text = Rgb(0xEC, 0xE9, 0xE0);
+    public static readonly Vector4 TextMuted = Rgb(0xA3, 0xA9, 0xC6);
+    public static readonly Vector4 Good = Rgb(0x4F, 0xB2, 0x86);
+    public static readonly Vector4 Bad = Rgb(0xF2, 0x9A, 0x9A);
+    public static readonly Vector4 Warn = Rgb(0xF0, 0xB4, 0x5A);
 
     private static readonly (ImGuiCol Slot, Vector4 Colour)[] Colours =
     [
@@ -28,40 +30,40 @@ public static class Theme
         (ImGuiCol.WindowBg, Black),
         (ImGuiCol.ChildBg, Panel),
         (ImGuiCol.PopupBg, Panel),
-        (ImGuiCol.Border, GoldDim with { W = 0.55f }),
+        (ImGuiCol.Border, Line),
         (ImGuiCol.FrameBg, PanelRaised),
-        (ImGuiCol.FrameBgHovered, Rgb(0x2A, 0x28, 0x2C)),
-        (ImGuiCol.FrameBgActive, Rgb(0x33, 0x30, 0x2A)),
+        (ImGuiCol.FrameBgHovered, Line),
+        (ImGuiCol.FrameBgActive, Rgb(0x36, 0x3F, 0x78)),
         (ImGuiCol.TitleBg, Black),
-        (ImGuiCol.TitleBgActive, Rgb(0x1A, 0x16, 0x0A)),
+        (ImGuiCol.TitleBgActive, Panel),
         (ImGuiCol.TitleBgCollapsed, Black),
         (ImGuiCol.ScrollbarBg, Black),
-        (ImGuiCol.ScrollbarGrab, GoldDim),
-        (ImGuiCol.ScrollbarGrabHovered, Gold),
-        (ImGuiCol.ScrollbarGrabActive, GoldBright),
+        (ImGuiCol.ScrollbarGrab, Line),
+        (ImGuiCol.ScrollbarGrabHovered, GoldDim),
+        (ImGuiCol.ScrollbarGrabActive, Gold),
         (ImGuiCol.CheckMark, Gold),
         (ImGuiCol.SliderGrab, Gold),
         (ImGuiCol.SliderGrabActive, GoldBright),
-        (ImGuiCol.Button, Rgb(0x2B, 0x24, 0x0F)),
-        (ImGuiCol.ButtonHovered, Rgb(0x4A, 0x3D, 0x14)),
-        (ImGuiCol.ButtonActive, Rgb(0x6B, 0x58, 0x1C)),
-        (ImGuiCol.Header, Rgb(0x2B, 0x24, 0x0F)),
-        (ImGuiCol.HeaderHovered, Rgb(0x4A, 0x3D, 0x14)),
-        (ImGuiCol.HeaderActive, Rgb(0x6B, 0x58, 0x1C)),
-        (ImGuiCol.Separator, GoldDim with { W = 0.6f }),
-        (ImGuiCol.ResizeGrip, GoldDim),
-        (ImGuiCol.ResizeGripHovered, Gold),
-        (ImGuiCol.ResizeGripActive, GoldBright),
+        (ImGuiCol.Button, PanelRaised),
+        (ImGuiCol.ButtonHovered, Line),
+        (ImGuiCol.ButtonActive, GoldDim),
+        (ImGuiCol.Header, PanelRaised),
+        (ImGuiCol.HeaderHovered, Line),
+        (ImGuiCol.HeaderActive, GoldDim),
+        (ImGuiCol.Separator, Line),
+        (ImGuiCol.ResizeGrip, Line),
+        (ImGuiCol.ResizeGripHovered, GoldDim),
+        (ImGuiCol.ResizeGripActive, Gold),
         (ImGuiCol.Tab, Panel),
-        (ImGuiCol.TabHovered, Rgb(0x4A, 0x3D, 0x14)),
-        (ImGuiCol.TabActive, Rgb(0x3A, 0x30, 0x10)),
+        (ImGuiCol.TabHovered, Line),
+        (ImGuiCol.TabActive, GoldDim),
         (ImGuiCol.TabUnfocused, Panel),
-        (ImGuiCol.TabUnfocusedActive, Rgb(0x2B, 0x24, 0x0F)),
-        (ImGuiCol.TableHeaderBg, Rgb(0x1F, 0x1A, 0x0B)),
-        (ImGuiCol.TableBorderStrong, GoldDim with { W = 0.6f }),
-        (ImGuiCol.TableBorderLight, GoldDim with { W = 0.25f }),
+        (ImGuiCol.TabUnfocusedActive, PanelRaised),
+        (ImGuiCol.TableHeaderBg, PanelRaised),
+        (ImGuiCol.TableBorderStrong, Line),
+        (ImGuiCol.TableBorderLight, Line with { W = 0.5f }),
         (ImGuiCol.TableRowBg, Panel),
-        (ImGuiCol.TableRowBgAlt, Rgb(0x19, 0x18, 0x1C)),
+        (ImGuiCol.TableRowBgAlt, Rgb(0x1A, 0x1F, 0x3D)),
         (ImGuiCol.TextSelectedBg, Gold with { W = 0.35f }),
         (ImGuiCol.NavHighlight, Gold),
     ];
@@ -115,10 +117,6 @@ public static class Theme
         ImGui.TextWrapped(text);
         ImGui.PopStyleColor();
     }
-
-    public static string Gil(long amount) => amount.ToString("N0", CultureInfo.InvariantCulture) + " gil";
-
-    public static string Hours(double hours) => $"{hours:0.00} h";
 
     public static string Clock(TimeSpan span) =>
         span.TotalHours >= 1 ? $"{(int)span.TotalHours}:{span.Minutes:00}:{span.Seconds:00}" : $"{span.Minutes:00}:{span.Seconds:00}";

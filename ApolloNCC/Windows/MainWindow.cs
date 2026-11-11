@@ -1,6 +1,5 @@
 using System;
 using System.Numerics;
-using ApolloNCC.Api;
 using ApolloNCC.Services;
 using ApolloNCC.Windows.Tabs;
 using Dalamud.Bindings.ImGui;
@@ -25,7 +24,7 @@ public sealed class MainWindow : Window
         this.hr = new HrTab(state);
         this.reception = new ReceptionTab(state);
         this.security = new SecurityTab(state, alerts);
-        this.settings = new SettingsTab(config, state, alerts);
+        this.settings = new SettingsTab(config, state);
 
         this.SizeConstraints = new WindowSizeConstraints
         {
@@ -49,16 +48,16 @@ public sealed class MainWindow : Window
     {
         this.DrawHeader();
 
-        var footer = ImGui.GetFrameHeightWithSpacing();
+        var footer = ImGui.GetFrameHeightWithSpacing() + ImGui.GetTextLineHeight();
         if (ImGui.BeginChild("body", new Vector2(0, -footer), false, ImGuiWindowFlags.NoBackground))
         {
             if (ImGui.BeginTabBar("tabs"))
             {
-                var profile = this.state.Profile;
-                this.Tab("HR", View.Hr, () => this.Gate(profile, this.hr.Draw));
-                if (profile?.CanUseReception() == true)
-                    this.Tab("Reception", View.Reception, () => this.reception.Draw(profile));
-                this.Tab("Security", View.Security, () => this.Gate(profile, this.security.Draw));
+                var access = this.state.Access is { IsStaff: true } a ? a : null;
+                this.Tab("HR", View.Hr, () => this.Gate(this.hr.Draw));
+                if (access?.CanUseReception == true)
+                    this.Tab("Reception", View.Reception, () => this.reception.Draw(access));
+                this.Tab("Security", View.Security, () => this.Gate(this.security.Draw));
                 this.Tab("Bar", View.Other, () => ComingSoon("Bar", "Bar buyouts and tab tracking"));
                 this.Tab("Casino", View.Other, () => ComingSoon("Casino", "Casino tracking"));
                 this.Tab("Raffle", View.Other, () => ComingSoon("Raffle", "Raffle ticket sales and draws"));
@@ -97,29 +96,34 @@ public sealed class MainWindow : Window
         ImGui.EndTabItem();
     }
 
-    private void Gate(Profile? profile, Action<Profile> draw)
+    private void Gate(Action<Access> draw)
     {
-        if (profile != null)
+        var access = this.state.Access;
+        if (access is { IsStaff: true })
         {
-            draw(profile);
+            draw(access);
             return;
         }
 
         ImGui.Spacing();
-        if (!this.state.IsConfigured)
+        if (!this.state.IsSignedIn)
         {
             ImGui.TextColored(Theme.Gold, "Welcome to Apollo.");
-            ImGui.TextWrapped("This plugin is for Apollo staff. Enter the plugin key an owner gave you to get started.");
+            ImGui.TextWrapped("This plugin is for Apollo staff. Sign in with the email and password you use on apolloncc.org.");
             if (ImGui.Button("Open Settings"))
                 this.ShowSettings();
         }
+        else if (access != null)
+        {
+            ImGui.TextWrapped("This account isn't on the staff yet, so there is nothing to show. An owner makes an account staff on the site.");
+        }
         else if (this.state.Error != null)
         {
-            ImGui.TextWrapped("Could not sign in to the Apollo web app. Check your key under Settings; the plugin keeps retrying.");
+            ImGui.TextWrapped("Could not load your login from the Apollo web app. The plugin keeps trying.");
         }
         else
         {
-            Theme.Muted("Signing in to the Apollo web app...");
+            Theme.Muted("Loading your login...");
         }
     }
 
@@ -133,12 +137,12 @@ public sealed class MainWindow : Window
         ImGui.SetCursorPosY(ImGui.GetCursorPosY() + (9 * scale));
         Theme.Muted("NIGHT CLUB & CASINO");
 
-        var profile = this.state.Profile;
-        if (profile != null)
+        if (this.state.Access is { IsStaff: true } access)
         {
-            var status = this.state.MyStatus;
-            var onShift = status?.ClockedIn == true;
-            var right = $"{profile.Name}  |  {profile.Title()}  |  ";
+            var row = this.state.MyRow;
+            var now = DateTimeOffset.UtcNow;
+            var onShift = row != null && Venue.OnClock(row, now);
+            var right = $"{this.state.MyName}  |  {access.RoleLabel}  |  ";
             var shift = onShift ? "On the clock" : "Off the clock";
             var width = ImGui.CalcTextSize(right + shift).X;
             ImGui.SameLine(ImGui.GetWindowContentRegionMax().X - width);
@@ -163,12 +167,12 @@ public sealed class MainWindow : Window
     {
         ImGui.Separator();
         if (this.state.Error is { } error)
-            ImGui.TextColored(Theme.Bad, error);
+            Theme.Wrapped(Theme.Bad, error);
         else if (this.state.Busy)
             Theme.Muted("Working...");
         else if (this.state.Notice is { } notice)
-            ImGui.TextColored(Theme.Gold, notice);
+            Theme.Wrapped(Theme.Gold, notice);
         else
-            Theme.Muted(this.state.IsLinked ? "Connected to the Apollo web app." : " ");
+            Theme.Muted(this.state.Access != null ? "Connected to the Apollo web app." : " ");
     }
 }

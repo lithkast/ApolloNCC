@@ -16,10 +16,10 @@ public sealed class SecurityTab(ApolloState state, Alerts alerts)
     private string warnWorld = "";
     private string warnReason = "";
 
-    public void Draw(Profile profile)
+    public void Draw(Access access)
     {
-        // Every staff member gets the blacklist. The rest is for security and owners.
-        if (!profile.CanUseSecurityTools())
+        // Every staff member gets the blacklist. The rest is for security and the owners.
+        if (!access.IsSecurity)
         {
             this.DrawBlacklist();
             return;
@@ -36,9 +36,10 @@ public sealed class SecurityTab(ApolloState state, Alerts alerts)
 
         if (ImGui.BeginTabItem("Bookings"))
         {
+            var now = DateTimeOffset.UtcNow;
             Theme.Section("Current bookings");
-            BookingTable.Draw("security", state.SecurityBookings, DateTimeOffset.UtcNow,
-                BookingTable.Columns.Staff | BookingTable.Columns.Client);
+            BookingTable.Draw("security", state.Bookings.Where(b => b.IsRunning(now)), now,
+                BookingTable.Columns.Employee | BookingTable.Columns.Patron | BookingTable.Columns.Type);
             ImGui.EndTabItem();
         }
 
@@ -61,46 +62,46 @@ public sealed class SecurityTab(ApolloState state, Alerts alerts)
     {
         Theme.Section("Blacklist");
         ImGui.SetNextItemWidth(280 * Theme.Scale);
-        ImGui.InputTextWithHint("##search", "Search name, world or reason", ref this.search, 64);
+        ImGui.InputTextWithHint("##search", "Search name, reason or notes", ref this.search, 64);
         ImGui.SameLine();
-        Theme.Muted($"{state.Blacklist.Count} banned");
+        Theme.Muted($"{state.Bans.Count} banned");
 
         var needle = this.search.Trim();
-        var rows = state.Blacklist
-            .Where(e => needle.Length == 0 ||
-                        e.Name.Contains(needle, StringComparison.OrdinalIgnoreCase) ||
-                        (e.World?.Contains(needle, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                        e.Reason.Contains(needle, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(e => e.Name)
+        bool Has(string s) => s.Contains(needle, StringComparison.OrdinalIgnoreCase);
+        var rows = state.Bans
+            .Where(b => needle.Length == 0 || Has(b.Name) || Has(b.Reason) || Has(b.Notes) || Has(b.By))
+            .OrderBy(b => b.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         if (rows.Count == 0)
         {
-            Theme.Muted(needle.Length == 0 ? "Nobody is on the blacklist." : "No match. They are not on the blacklist.");
+            Theme.Muted(needle.Length > 0 ? "No match. They are not on the blacklist." : "Loading the blacklist...");
             return;
         }
 
-        if (!ImGui.BeginTable("blacklist", 4, TableFlags))
+        if (!ImGui.BeginTable("blacklist", 5, TableFlags | ImGuiTableFlags.ScrollY))
             return;
 
-        ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.None, 2f);
-        ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.None, 1.2f);
-        ImGui.TableSetupColumn("Reason", ImGuiTableColumnFlags.None, 4f);
-        ImGui.TableSetupColumn("Added", ImGuiTableColumnFlags.None, 1.8f);
+        ImGui.TableSetupScrollFreeze(0, 1);
+        ImGui.TableSetupColumn("Banned player", ImGuiTableColumnFlags.None, 2.2f);
+        ImGui.TableSetupColumn("Date", ImGuiTableColumnFlags.None, 1.1f);
+        ImGui.TableSetupColumn("Authorized by", ImGuiTableColumnFlags.None, 1.6f);
+        ImGui.TableSetupColumn("Reason", ImGuiTableColumnFlags.None, 2.4f);
+        ImGui.TableSetupColumn("Notes", ImGuiTableColumnFlags.None, 3f);
         ImGui.TableHeadersRow();
-        foreach (var e in rows)
+        foreach (var b in rows)
         {
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
-            ImGui.TextColored(Theme.Bad, e.Name);
+            ImGui.TextColored(Theme.Bad, b.Name);
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(e.World ?? "Any");
+            Theme.Muted(b.Date.Length >= 10 ? b.Date[..10] : b.Date);
             ImGui.TableNextColumn();
-            ImGui.TextWrapped(e.Reason);
+            ImGui.TextUnformatted(b.By);
             ImGui.TableNextColumn();
-            Theme.Muted(e.AddedAt is { } at ? $"{at.LocalDateTime:d}" : "");
-            if (e.AddedBy != null && ImGui.IsItemHovered())
-                ImGui.SetTooltip($"Added by {e.AddedBy}");
+            ImGui.TextWrapped(b.Reason);
+            ImGui.TableNextColumn();
+            ImGui.TextWrapped(b.Notes);
         }
 
         ImGui.EndTable();
@@ -109,12 +110,18 @@ public sealed class SecurityTab(ApolloState state, Alerts alerts)
     private void DrawWarnings()
     {
         Theme.Section("Log a warning");
+        if (state.SecurityStoreMissing)
+        {
+            Theme.Wrapped(Theme.Warn, "The web app can't store warnings yet: its plugin update needs deploying first. Until then nothing here is saved.");
+            return;
+        }
+
         TargetPicker.Draw("warn", ref this.warnName, ref this.warnWorld);
 
         var name = this.warnName.Trim();
         var world = this.warnWorld.Trim();
-        if (name.Length > 0 && alerts.Match(name, world.Length > 0 ? world : null) != null)
-            ImGui.TextColored(Theme.Bad, "This patron is on the blacklist.");
+        if (name.Length > 0 && alerts.Match(name, world) != null)
+            ImGui.TextColored(Theme.Bad, "This player is on the blacklist.");
 
         ImGui.SetNextItemWidth(-1);
         ImGui.InputTextWithHint("##reason", "Brief reason for the warning", ref this.warnReason, 300);
@@ -123,7 +130,7 @@ public sealed class SecurityTab(ApolloState state, Alerts alerts)
         ImGui.BeginDisabled(!ready || state.Busy);
         if (ImGui.Button("Submit warning"))
         {
-            state.AddWarning(name, world.Length > 0 ? world : null, this.warnReason.Trim(), () =>
+            state.AddWarning(name, world, this.warnReason.Trim(), () =>
             {
                 this.warnName = this.warnWorld = this.warnReason = "";
             });
@@ -153,20 +160,20 @@ public sealed class SecurityTab(ApolloState state, Alerts alerts)
         {
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
-            var prior = warnings.Count(o => SamePatron(o, w));
             ImGui.TextUnformatted(Theme.PersonAt(w.Name, w.World));
-            if (prior > 1)
+            var count = warnings.Count(o => SamePatron(o, w));
+            if (count > 1)
             {
                 ImGui.SameLine();
-                ImGui.TextColored(Theme.Warn, $"x{prior}");
+                ImGui.TextColored(Theme.Warn, $"x{count}");
             }
 
             ImGui.TableNextColumn();
             ImGui.TextWrapped(w.Reason);
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(w.IssuedBy);
+            ImGui.TextUnformatted(w.By);
             ImGui.TableNextColumn();
-            Theme.Muted($"{w.IssuedAt.LocalDateTime:g}");
+            Theme.Muted($"{w.At.LocalDateTime:g}");
         }
 
         ImGui.EndTable();
@@ -174,22 +181,24 @@ public sealed class SecurityTab(ApolloState state, Alerts alerts)
 
     private void DrawSightings()
     {
-        Theme.Section("Banned patrons seen in the venue");
+        Theme.Section("Banned players seen in the venue");
         Theme.Wrapped(Theme.TextMuted,
-            "While alerts are on, the plugin checks players near you against the blacklist and tells all security staff about a match.");
+            "While alerts are on, the plugin checks players near you against the blacklist. A match alerts you, and the rest of security within half a minute.");
         ImGui.Spacing();
+        if (state.SecurityStoreMissing)
+            Theme.Wrapped(Theme.Warn, "Telling the rest of security needs the web app's plugin update deployed. Until then only you are alerted.");
 
         var sightings = state.Sightings;
         if (sightings.Count == 0)
         {
-            Theme.Muted("No banned patrons have been seen.");
+            Theme.Muted("No banned players have been seen.");
             return;
         }
 
         if (!ImGui.BeginTable("sightings", 4, TableFlags))
             return;
 
-        ImGui.TableSetupColumn("Patron", ImGuiTableColumnFlags.None, 2.4f);
+        ImGui.TableSetupColumn("Player", ImGuiTableColumnFlags.None, 2.4f);
         ImGui.TableSetupColumn("Banned for", ImGuiTableColumnFlags.None, 4f);
         ImGui.TableSetupColumn("Seen by", ImGuiTableColumnFlags.None, 1.8f);
         ImGui.TableSetupColumn("When", ImGuiTableColumnFlags.None, 1.6f);
@@ -200,11 +209,11 @@ public sealed class SecurityTab(ApolloState state, Alerts alerts)
             ImGui.TableNextColumn();
             ImGui.TextColored(Theme.Bad, Theme.PersonAt(s.Name, s.World));
             ImGui.TableNextColumn();
-            ImGui.TextWrapped(s.Reason);
+            ImGui.TextWrapped(s.Ban);
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(s.ReportedBy);
+            ImGui.TextUnformatted(s.By);
             ImGui.TableNextColumn();
-            Theme.Muted($"{s.SeenAt.LocalDateTime:g}");
+            Theme.Muted($"{s.At.LocalDateTime:g}");
         }
 
         ImGui.EndTable();

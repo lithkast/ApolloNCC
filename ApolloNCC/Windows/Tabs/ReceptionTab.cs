@@ -3,113 +3,148 @@ using System.Linq;
 using ApolloNCC.Api;
 using ApolloNCC.Services;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Game.ClientState.Objects.SubKinds;
 
 namespace ApolloNCC.Windows.Tabs;
 
 public sealed class ReceptionTab(ApolloState state)
 {
-    private string staffId = "";
-    private string clientName = "";
-    private string clientWorld = "";
-    private string room = "";
-    private int minutes = 30;
-    private int amount;
+    private static readonly string[] RpTypes = ["Public", "Private", "No Staff"];
+
+    private string employee = "";
+    private string patron = "";
+    private string patronWorld = "";
+    private string rpType = "";
+    private double hours = 1;
+    private int guests = 1;
+    private bool vip;
+    private string location = "";
     private string? tellResult;
 
-    public void Draw(Profile profile)
+    public void Draw(Access access)
     {
-        var summary = state.Reception;
-        if (summary == null)
-        {
-            Theme.Muted("Loading reception...");
-            return;
-        }
-
+        var cfg = state.Config;
         var now = DateTimeOffset.UtcNow;
+        var total = state.Bookings.Sum(b => b.Total ?? 0);
 
         Theme.Section("Tonight");
-        Theme.Stat("Bookings paid", Theme.Gil(summary.TotalPaid));
-        Theme.Stat($"Reception bonus ({summary.BonusRate:P0})", Theme.Gil(summary.ReceptionBonus));
-        Theme.Stat("Active bookings", summary.Bookings.Count(b => b.EndsAt > now).ToString());
+        Theme.Stat("Receptionist", state.Receptionist.Length > 0 ? state.Receptionist : "nobody yet");
+        Theme.Stat("Bookings total", Venue.Gil(total));
+        Theme.Stat($"Reception bonus ({cfg.ReceptionBonus:P0})", Venue.Gil(total * cfg.ReceptionBonus), Theme.Gold);
+        Theme.Stat("Running now", state.Bookings.Count(b => b.IsRunning(now)).ToString());
         Theme.EndStats();
+        if (state.MyName.Length > 0 && !string.Equals(state.Receptionist, state.MyName, StringComparison.OrdinalIgnoreCase))
+        {
+            ImGui.BeginDisabled(state.Busy);
+            if (ImGui.Button("I'm on reception tonight"))
+                state.TakeReception();
+            ImGui.EndDisabled();
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Puts your name down as tonight's receptionist. The reception bonus goes to whoever is named.");
+        }
 
-        this.DrawForm(summary);
+        if (state.CollabNight)
+        {
+            Theme.Section("New booking");
+            ImGui.TextColored(Theme.Warn, "Reception is not taking bookings on a collab night.");
+        }
+        else
+        {
+            this.DrawForm(cfg, now);
+        }
 
         Theme.Section("Bookings");
         BookingTable.Draw(
-            "reception", summary.Bookings, now,
-            BookingTable.Columns.Staff | BookingTable.Columns.Client | BookingTable.Columns.BookedBy | BookingTable.Columns.Amount,
-            b => this.DrawActions(profile, b, now));
+            "reception", state.Bookings, now,
+            BookingTable.Columns.Employee | BookingTable.Columns.Patron | BookingTable.Columns.Type | BookingTable.Columns.Total,
+            b => this.DrawTell(b, now));
         if (this.tellResult != null)
             Theme.Muted(this.tellResult);
     }
 
-    private void DrawForm(ReceptionSummary summary)
+    private void DrawForm(VenueConfig cfg, DateTimeOffset now)
     {
         Theme.Section("New booking");
         var labelWidth = 90 * Theme.Scale;
-        var selected = summary.Staff.Find(s => s.EmployeeId == this.staffId);
 
         Label("Staff", labelWidth);
         ImGui.SetNextItemWidth(330 * Theme.Scale);
-        if (ImGui.BeginCombo("##staff", selected != null ? $"{selected.Name} ({selected.Job})" : "Choose staff member"))
+        if (ImGui.BeginCombo("##staff", this.employee.Length > 0 ? this.employee : "Choose staff member"))
         {
             // People on the clock first: they are the ones who can actually take a booking.
-            foreach (var s in summary.Staff.OrderByDescending(s => s.ClockedIn).ThenBy(s => s.Name))
+            foreach (var r in state.Roster.OrderByDescending(r => Venue.OnClock(r, now)))
             {
-                var label = $"{s.Name} ({s.Job}){(s.ClockedIn ? "" : "  - off the clock")}";
-                if (ImGui.Selectable(label, s.EmployeeId == this.staffId))
-                    this.staffId = s.EmployeeId;
+                var label = $"{r.Name} ({r.Job}){(Venue.OnClock(r, now) ? "" : "  - off the clock")}";
+                if (ImGui.Selectable(label, r.Name == this.employee))
+                    this.employee = r.Name;
             }
 
             ImGui.EndCombo();
         }
 
-        Label("Client", labelWidth);
-        TargetPicker.Draw("client", ref this.clientName, ref this.clientWorld);
+        Label("Patron", labelWidth);
+        TargetPicker.Draw("patron", ref this.patron, ref this.patronWorld);
+
+        Label("RP type", labelWidth);
+        ImGui.SetNextItemWidth(200 * Theme.Scale);
+        if (ImGui.BeginCombo("##type", this.rpType.Length > 0 ? this.rpType : "Choose type"))
+        {
+            foreach (var t in RpTypes)
+            {
+                if (ImGui.Selectable(t, t == this.rpType))
+                    this.rpType = t;
+            }
+
+            ImGui.EndCombo();
+        }
+
+        Label("Hours", labelWidth);
+        ImGui.SetNextItemWidth(120 * Theme.Scale);
+        ImGui.InputDouble("##hours", ref this.hours, 0.5, 1, "%.2f");
+        this.hours = Math.Clamp(this.hours, 0, 24);
+        ImGui.SameLine();
+        Label("Guests", 0);
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(100 * Theme.Scale);
+        ImGui.InputInt("##guests", ref this.guests, 1, 1);
+        this.guests = Math.Clamp(this.guests, 1, 99);
+        ImGui.SameLine();
+        ImGui.Checkbox("VIP", ref this.vip);
 
         Label("Room", labelWidth);
         ImGui.SetNextItemWidth(200 * Theme.Scale);
-        if (ImGui.BeginCombo("##room", this.room.Length > 0 ? this.room : "Choose room"))
+        if (cfg.Rooms.Count == 0)
         {
-            foreach (var r in state.Meta.Rooms)
+            ImGui.InputText("##room", ref this.location, 60);
+        }
+        else if (ImGui.BeginCombo("##room", this.location.Length > 0 ? this.location : "Choose room"))
+        {
+            foreach (var r in cfg.Rooms)
             {
-                if (ImGui.Selectable(r, r == this.room))
-                    this.room = r;
+                if (ImGui.Selectable(r, r == this.location))
+                    this.location = r;
             }
 
             ImGui.EndCombo();
         }
 
-        Label("Minutes", labelWidth);
-        ImGui.SetNextItemWidth(120 * Theme.Scale);
-        ImGui.InputInt("##minutes", ref this.minutes, 15, 30);
-        this.minutes = Math.Clamp(this.minutes, 0, 24 * 60);
-
-        Label("Client pays", labelWidth);
-        ImGui.SetNextItemWidth(200 * Theme.Scale);
-        ImGui.InputInt("##amount", ref this.amount, 50_000, 100_000);
-        this.amount = Math.Max(0, this.amount);
-        ImGui.SameLine();
-        Theme.Muted("gil");
+        // what the patron pays, by the prices in the site's Settings
+        var price = Venue.ReceptionTotal(cfg, this.rpType, this.hours, this.guests, this.vip);
+        Label("Patron pays", labelWidth);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.GoldBright, price != null ? Venue.Gil(price) : "-");
 
         var missing = this.Missing();
-        ImGui.Dummy(new System.Numerics.Vector2(labelWidth, 0));
+        ImGui.Dummy(new System.Numerics.Vector2(labelWidth - ImGui.GetStyle().ItemSpacing.X, 0));
         ImGui.SameLine();
         ImGui.BeginDisabled(missing != null || state.Busy);
         if (ImGui.Button("Submit booking"))
         {
+            var name = this.patron.Trim();
+            var world = this.patronWorld.Trim();
             state.CreateBooking(
-                new CreateBookingRequest
-                {
-                    StaffId = this.staffId,
-                    ClientName = this.clientName.Trim(),
-                    ClientWorld = this.clientWorld.Trim() is { Length: > 0 } w ? w : null,
-                    Room = this.room,
-                    Minutes = this.minutes,
-                    Amount = this.amount,
-                },
-                this.ClearForm);
+                this.employee, world.Length > 0 && name.Length > 0 ? $"{name}@{world}" : name,
+                this.rpType, this.hours, this.guests, this.vip, this.location.Trim(), this.ClearForm);
         }
 
         ImGui.EndDisabled();
@@ -120,43 +155,63 @@ public sealed class ReceptionTab(ApolloState state)
         }
     }
 
-    private void DrawActions(Profile profile, Booking b, DateTimeOffset now)
+    private void DrawTell(Booking b, DateTimeOffset now)
     {
-        var timeUp = b.EndsAt <= now;
-        var isMe = b.StaffId == profile.EmployeeId;
-        var canTell = !isMe && b.StaffCharacter is { Length: > 0 } && b.StaffWorld is { Length: > 0 };
+        if (b.Employee.Length == 0)
+            return;
 
-        ImGui.BeginDisabled(!canTell);
+        var isMe = string.Equals(b.Employee, state.MyName, StringComparison.OrdinalIgnoreCase);
+        var target = isMe ? null : this.FindCharacter(b.Employee, now);
+        var timeUp = b.EndsAt is { } end && end <= now;
+
+        ImGui.BeginDisabled(target == null);
         if (timeUp)
-            ImGui.PushStyleColor(ImGuiCol.Button, Theme.Bad with { W = 0.55f });
-        if (ImGui.SmallButton("Tell: time's up"))
-            this.SendTimeUpTell(b);
+            ImGui.PushStyleColor(ImGuiCol.Button, Theme.Bad with { W = 0.45f });
+        if (ImGui.SmallButton("Tell: time's up") && target is { } t)
+            this.SendTimeUpTell(b, t.Name, t.World);
         if (timeUp)
             ImGui.PopStyleColor();
         ImGui.EndDisabled();
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
         {
-            ImGui.SetTooltip(canTell
-                ? $"Sends a tell to {b.StaffCharacter}@{b.StaffWorld} saying their time is up."
-                : isMe ? "This is your own booking." : $"{b.StaffName} has not been seen in game with the plugin yet.");
+            ImGui.SetTooltip(target is { } found
+                ? $"Sends a tell to {found.Name}@{found.World} saying their time is up."
+                : isMe ? "This is your own booking." : $"{b.Employee} isn't nearby and hasn't been seen in game with the plugin tonight.");
         }
-
-        ImGui.SameLine();
-        ImGui.BeginDisabled(state.Busy);
-        if (ImGui.SmallButton("End"))
-            state.EndBooking(b);
-        ImGui.EndDisabled();
     }
 
-    private void SendTimeUpTell(Booking b)
+    /// <summary>
+    /// The character to send a staff member's tell to: the one their plugin last reported (it may be an alt),
+    /// or failing that someone nearby with the name on the roster.
+    /// </summary>
+    private (string Name, string World)? FindCharacter(string employee, DateTimeOffset now)
     {
-        var message = $"[Apollo] Time is up with {b.ClientName} in {b.Room}.";
+        var login = state.Roster.FirstOrDefault(r => string.Equals(r.Name, employee, StringComparison.OrdinalIgnoreCase))?.Login;
+        if (login is { Length: > 0 } && state.Presence.TryGetValue(login, out var p) &&
+            now - p.At < TimeSpan.FromHours(16) && p.Name.Length > 0 && p.World.Length > 0)
+            return (p.Name, p.World);
+
+        foreach (var obj in Plugin.ObjectTable.PlayerObjects)
+        {
+            if (obj is IPlayerCharacter pc && string.Equals(pc.Name.TextValue, employee, StringComparison.OrdinalIgnoreCase) &&
+                pc.HomeWorld.ValueNullable?.Name.ExtractText() is { Length: > 0 } world)
+                return (pc.Name.TextValue, world);
+        }
+
+        return null;
+    }
+
+    private void SendTimeUpTell(Booking b, string name, string world)
+    {
+        var who = b.Patron.Length > 0 ? $" with {b.Patron}" : "";
+        var where = b.Location.Length > 0 ? $" in {b.Location}" : "";
+        var message = $"[Apollo] Time is up{who}{where}.";
         Plugin.Framework.RunOnFrameworkThread(() =>
         {
             try
             {
-                GameChat.SendTell(b.StaffCharacter!, b.StaffWorld!, message);
-                this.tellResult = $"Tell sent to {b.StaffName}.";
+                GameChat.SendTell(name, world, message);
+                this.tellResult = $"Tell sent to {b.Employee}.";
             }
             catch (Exception e) when (e is ArgumentException or InvalidOperationException)
             {
@@ -167,28 +222,28 @@ public sealed class ReceptionTab(ApolloState state)
 
     private string? Missing()
     {
-        if (this.staffId.Length == 0)
+        if (this.rpType.Length == 0)
+            return "Choose the RP type.";
+        if (this.employee.Length == 0 && this.rpType != "No Staff")
             return "Choose a staff member.";
-        if (string.IsNullOrWhiteSpace(this.clientName))
-            return "Enter the client's name.";
-        if (this.room.Length == 0)
-            return "Choose a room.";
-        return this.minutes <= 0 ? "Enter how many minutes." : null;
+        if (string.IsNullOrWhiteSpace(this.patron))
+            return "Enter the patron's name.";
+        return this.hours <= 0 ? "Enter how many hours." : null;
     }
 
     private void ClearForm()
     {
-        this.staffId = "";
-        this.clientName = "";
-        this.clientWorld = "";
-        this.room = "";
-        this.amount = 0;
+        this.employee = this.patron = this.patronWorld = this.rpType = this.location = "";
+        this.hours = 1;
+        this.guests = 1;
+        this.vip = false;
     }
 
     private static void Label(string text, float width)
     {
         ImGui.AlignTextToFramePadding();
         Theme.Muted(text);
-        ImGui.SameLine(width);
+        if (width > 0)
+            ImGui.SameLine(width);
     }
 }

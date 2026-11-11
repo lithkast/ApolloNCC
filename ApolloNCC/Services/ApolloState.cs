@@ -1,54 +1,66 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using ApolloNCC.Api;
 
 namespace ApolloNCC.Services;
 
+public enum View
+{
+    Hr,
+    Reception,
+    Security,
+    Other,
+}
+
 /// <summary>
 /// The plugin's copy of what the web app knows, plus the actions that change it.
 /// Network work runs in the background; the UI only ever reads the latest snapshot.
 /// Lists are replaced whole, never edited in place, so reading them from the draw thread is safe.
 /// </summary>
-public sealed class ApolloState : IDisposable
+public sealed partial class ApolloState : IDisposable
 {
-    private static readonly TimeSpan CoreInterval = TimeSpan.FromSeconds(20);
-    private static readonly TimeSpan ViewInterval = TimeSpan.FromSeconds(15);
-    private static readonly TimeSpan BlacklistInterval = TimeSpan.FromMinutes(3);
-
     private readonly Configuration config;
-    private readonly HttpApolloApi http;
-    private readonly DemoApolloApi demo;
+    private readonly FirebaseClient client;
     private readonly CancellationTokenSource cts = new();
+    private readonly Dictionary<string, DateTimeOffset> due = [];
 
-    private DateTimeOffset nextCore = DateTimeOffset.MinValue;
-    private DateTimeOffset nextView = DateTimeOffset.MinValue;
-    private DateTimeOffset nextBlacklist = DateTimeOffset.MinValue;
     private int busy;
-    private int coreRunning;
-    private int viewRunning;
+    private int refreshing;
     private int session;
+    private string? myRowId;
+    private string? publishedCharacter;
+    private bool presenceRefused;
 
-    public ApolloState(Configuration config, Func<string?> character)
+    public ApolloState(Configuration config)
     {
         this.config = config;
-        this.http = new HttpApolloApi(() => config.BaseUrl, () => config.SecretKey, character);
-        this.demo = new DemoApolloApi(() => config.DemoRank);
+        this.client = new FirebaseClient(config.SavedSession);
     }
 
-    public Profile? Profile { get; private set; }
-    public VenueMeta Meta { get; private set; } = new();
-    public EmployeeStatus? MyStatus { get; private set; }
-    public IReadOnlyList<Booking> MyBookings { get; private set; } = [];
-    public IReadOnlyList<EmployeeStatus> Staff { get; private set; } = [];
-    public ReceptionSummary? Reception { get; private set; }
-    public IReadOnlyList<Booking> SecurityBookings { get; private set; } = [];
-    public IReadOnlyList<BlacklistEntry> Blacklist { get; private set; } = [];
+    public Access? Access { get; private set; }
+    public VenueConfig Config { get; private set; } = new(null);
+    public HrRow? MyRow { get; private set; }
+    public bool CollabNight { get; private set; }
+    public string Receptionist { get; private set; } = "";
+    public IReadOnlyList<Booking> Bookings { get; private set; } = [];
+    public IReadOnlyList<Doc> Buyouts { get; private set; } = [];
+    public IReadOnlyList<HrRow> Roster { get; private set; } = [];
+    public IReadOnlyList<ClockReview> Reviews { get; private set; } = [];
+    public IReadOnlyList<Ban> Bans { get; private set; } = [];
     public IReadOnlyList<PatronWarning> Warnings { get; private set; } = [];
     public IReadOnlyList<Sighting> Sightings { get; private set; } = [];
-    public DiscordLinkCode? DiscordCode { get; private set; }
+    public IReadOnlyDictionary<string, Presence> Presence { get; private set; } = new Dictionary<string, Presence>();
+    public string? DiscordName { get; private set; }
+    public (string Code, DateTimeOffset Expires)? DiscordCode { get; private set; }
+
+    /// <summary>The web app's database rules don't know the plugin's collections yet (not deployed).</summary>
+    public bool SecurityStoreMissing { get; private set; }
 
     /// <summary>Last thing that went wrong, worded for the user. Cleared by the next success.</summary>
     public string? Error { get; private set; }
@@ -58,255 +70,497 @@ public sealed class ApolloState : IDisposable
 
     public bool Busy => this.busy > 0;
 
-    public bool IsConfigured => this.config.DemoMode || !string.IsNullOrWhiteSpace(this.config.SecretKey);
+    public bool IsSignedIn => this.client.Session != null;
 
-    public bool IsLinked => this.Profile != null;
+    public string Email => this.client.Session?.Email ?? "";
 
-    private IApolloApi Api => this.config.DemoMode ? this.demo : this.http;
+    /// <summary>The name on this login's roster row: the main character, whichever alt is logged in.</summary>
+    public string MyName => this.MyRow?.Name is { Length: > 0 } n ? n : this.Access?.AccountName ?? "";
+
+    public IEnumerable<Booking> MyBookings =>
+        this.MyRow?.Name is { Length: > 0 } name
+            ? this.Bookings.Where(b => string.Equals(b.Employee, name, StringComparison.OrdinalIgnoreCase))
+            : [];
 
     public void Dispose()
     {
         this.cts.Cancel();
         this.cts.Dispose();
-        this.http.Dispose();
+        this.client.Dispose();
     }
 
-    /// <summary>Forget everything and sign in again. Call after the key, address or demo mode changes.</summary>
-    public void Reconnect()
-    {
-        this.session++;
-        this.Profile = null;
-        this.MyStatus = null;
-        this.MyBookings = [];
-        this.Staff = [];
-        this.Reception = null;
-        this.SecurityBookings = [];
-        this.Blacklist = [];
-        this.Warnings = [];
-        this.Sightings = [];
-        this.DiscordCode = null;
-        this.Error = null;
-        this.Notice = null;
-        this.nextCore = this.nextView = this.nextBlacklist = DateTimeOffset.MinValue;
-    }
+    public ShiftSummary? MySummary(DateTimeOffset now) =>
+        this.MyRow is { } row
+            ? Venue.WithExtras(Venue.Summarise(this.Config, row, this.CollabNight, now), this.Config, row.Name, this.Bookings, this.Receptionist, this.Buyouts)
+            : null;
 
-    /// <summary>Called every frame. Starts background refreshes when they are due.</summary>
-    /// <param name="view">Which tab's data to keep fresh, or null when the window is closed.</param>
-    public void Tick(DateTimeOffset now, View? view)
+    /// <summary>Called every frame. Starts a background refresh of whatever is due.</summary>
+    /// <param name="view">The open tab, or null when the window is closed.</param>
+    /// <param name="character">"Name@World" of the logged-in character.</param>
+    public void Tick(DateTimeOffset now, View? view, (string Name, string World)? character, bool bannedAlerts)
     {
-        if (!this.IsConfigured)
+        if (!this.IsSignedIn || Interlocked.Exchange(ref this.refreshing, 1) == 1)
             return;
 
-        if (now >= this.nextCore && Interlocked.Exchange(ref this.coreRunning, 1) == 0)
+        var jobs = new List<Func<int, CancellationToken, Task>>();
+        var access = this.Access;
+        if (this.Due("account", now, TimeSpan.FromMinutes(5)))
+            jobs.Add(this.RefreshAccount);
+
+        if (access is { IsStaff: true })
         {
-            // Without a working sign-in, retry slowly instead of hammering the web app.
-            this.nextCore = now + CoreInterval;
-            var blacklistDue = now >= this.nextBlacklist;
-            if (blacklistDue)
-                this.nextBlacklist = now + BlacklistInterval;
-            this.Background(() => this.RefreshCore(blacklistDue), () => this.coreRunning = 0);
-        }
+            var open = view != null;
+            var working = this.MyRow is { } r && (Venue.OnClock(r, now) || Venue.Promoting(r, now));
+            if (this.Due("me", now, TimeSpan.FromSeconds(open || working ? 30 : 120)))
+                jobs.Add((s, ct) => this.RefreshMe(s, open, ct));
 
-        if (view is { } v && this.Profile != null && now >= this.nextView &&
-            Interlocked.Exchange(ref this.viewRunning, 1) == 0)
-        {
-            this.nextView = now + ViewInterval;
-            this.Background(() => this.RefreshView(v), () => this.viewRunning = 0);
-        }
-    }
+            var wantsRoster = (view == View.Hr && access.SeesStaff) || (view == View.Reception && access.CanUseReception);
+            if (wantsRoster && this.Due("roster", now, TimeSpan.FromSeconds(view == View.Hr ? 30 : 90)))
+                jobs.Add((s, ct) => this.RefreshRoster(s, view == View.Hr && access.IsOwner, ct));
 
-    /// <summary>Refresh the open tab on the next frame.</summary>
-    public void RefreshSoon() => this.nextCore = this.nextView = DateTimeOffset.MinValue;
+            if (view == View.Reception && access.CanUseReception && this.Due("presence", now, TimeSpan.FromSeconds(60)))
+                jobs.Add(this.RefreshPresence);
 
-    public void ClockIn() => this.Act(async ct => this.MyStatus = await this.Api.ClockInAsync(ct),
-        () => this.MyStatus?.ClockInPendingApproval == true
-            ? "Clocked in. This clock-in needs your manager's approval before pay goes out."
-            : "Clocked in.");
+            var watching = access.IsSecurity && bannedAlerts;
+            if ((view == View.Security || watching) && this.Due("bans", now, view == View.Security ? TimeSpan.FromMinutes(1) : TimeSpan.FromMinutes(10)))
+                jobs.Add(this.RefreshBans);
+            if (view == View.Security && access.IsSecurity && this.Due("warnings", now, TimeSpan.FromSeconds(30)))
+                jobs.Add(this.RefreshWarnings);
+            if (access.IsSecurity && (watching || view == View.Security) && this.Due("sightings", now, TimeSpan.FromSeconds(30)))
+                jobs.Add(this.RefreshSightings);
 
-    public void ClockOut() => this.Act(async ct => this.MyStatus = await this.Api.ClockOutAsync(ct), () => "Clocked out.");
-
-    public void PfClockIn(bool partyFinder, bool shouts) =>
-        this.Act(async ct => this.MyStatus = await this.Api.PfClockInAsync(partyFinder, shouts, ct), () => "Clocked in for PF.");
-
-    public void PfClockOut() => this.Act(async ct => this.MyStatus = await this.Api.PfClockOutAsync(ct), () => "Clocked out of PF.");
-
-    public void ApproveClockIn(EmployeeStatus who) =>
-        this.Act(async ct => this.ReplaceStaff(await this.Api.ApproveClockInAsync(who.EmployeeId, ct)),
-            () => $"Approved {who.Name}'s clock-in.");
-
-    public void SetCollab(EmployeeStatus who, bool active, string job) =>
-        this.Act(async ct => this.ReplaceStaff(await this.Api.SetCollabAsync(who.EmployeeId, active, job, ct)), () =>
-        {
-            var updated = this.Staff.FirstOrDefault(s => s.EmployeeId == who.EmployeeId);
-            if (!active)
-                return $"Collab pay turned off for {who.Name}.";
-            return updated?.Collab.PendingJob is { } pending
-                ? $"{who.Name} stays on {updated.Collab.Job} collab pay until an owner approves {pending}."
-                : $"Collab pay set for {who.Name}.";
-        });
-
-    public void DecideCollabJob(EmployeeStatus who, bool approve) =>
-        this.Act(async ct => this.ReplaceStaff(await this.Api.DecideCollabJobAsync(who.EmployeeId, approve, ct)),
-            () => approve ? $"Approved {who.Name}'s collab job." : $"Declined {who.Name}'s collab job.");
-
-    public void CreateBooking(CreateBookingRequest request, Action onSuccess) =>
-        this.Act(async ct =>
-        {
-            var booking = await this.Api.CreateBookingAsync(request, ct);
-            this.Reception = await this.Api.GetReceptionAsync(ct);
-            this.Notice = $"Booked {booking.StaffName} for {booking.ClientName} in {booking.Room}.";
-            onSuccess();
-        });
-
-    public void EndBooking(Booking booking) =>
-        this.Act(async ct =>
-        {
-            await this.Api.EndBookingAsync(booking.Id, ct);
-            this.Reception = await this.Api.GetReceptionAsync(ct);
-        }, () => "Booking ended.");
-
-    public void AddWarning(string name, string? world, string reason, Action onSuccess) =>
-        this.Act(async ct =>
-        {
-            var warning = await this.Api.AddWarningAsync(name, world, reason, ct);
-            this.Warnings = [warning, .. this.Warnings];
-            this.Notice = $"Warning logged for {warning.Name}. Remember to post proof in the Discord security channel.";
-            onSuccess();
-        });
-
-    public void ReportSighting(BlacklistEntry entry, string name, string? world) =>
-        this.Background(() => this.Api.ReportSightingAsync(entry.Id, name, world, this.cts.Token));
-
-    public void StartDiscordLink() =>
-        this.Act(async ct => this.DiscordCode = await this.Api.StartDiscordLinkAsync(ct));
-
-    private async Task RefreshCore(bool blacklistDue)
-    {
-        var ct = this.cts.Token;
-        var api = this.Api;
-        var session = this.session;
-
-        Profile profile;
-        try
-        {
-            profile = await api.GetProfileAsync(ct);
-        }
-        catch (ApolloApiException e) when (e.KeyRejected && session == this.session)
-        {
-            // A revoked key must not leave the last employee's data on screen.
-            this.Reconnect();
-            this.nextCore = DateTimeOffset.UtcNow + CoreInterval;
-            throw;
-        }
-
-        var meta = this.Profile == null ? await api.GetMetaAsync(ct) : null;
-        var status = await api.GetMyStatusAsync(ct);
-        var bookings = await api.GetMyBookingsAsync(ct);
-        var blacklist = blacklistDue ? await api.GetBlacklistAsync(ct) : null;
-        var sightings = profile.CanUseSecurityTools() ? await api.GetSightingsAsync(ct) : null;
-
-        // The key or mode changed while this was in flight: these answers belong to the old sign-in.
-        if (session != this.session)
-            return;
-
-        this.Profile = profile;
-        this.Meta = meta ?? this.Meta;
-        this.MyStatus = status;
-        this.MyBookings = bookings;
-        this.Blacklist = blacklist ?? this.Blacklist;
-        this.Sightings = sightings ?? this.Sightings;
-        this.Error = null;
-    }
-
-    private async Task RefreshView(View view)
-    {
-        var ct = this.cts.Token;
-        var api = this.Api;
-        var session = this.session;
-        var profile = this.Profile;
-        if (profile == null)
-            return;
-
-        switch (view)
-        {
-            case View.Hr when profile.CanSeeStaff():
-                var staff = await api.GetStaffAsync(ct);
-                if (session == this.session)
-                    this.Staff = staff;
-                break;
-            case View.Reception when profile.CanUseReception():
-                var reception = await api.GetReceptionAsync(ct);
-                if (session == this.session)
-                    this.Reception = reception;
-                break;
-            case View.Security when profile.CanUseSecurityTools():
-                var bookings = await api.GetSecurityBookingsAsync(ct);
-                var warnings = await api.GetWarningsAsync(ct);
-                if (session == this.session)
-                {
-                    this.SecurityBookings = bookings;
-                    this.Warnings = warnings;
-                }
-
-                break;
-        }
-    }
-
-    private void ReplaceStaff(EmployeeStatus updated)
-    {
-        this.Staff = this.Staff.Select(s => s.EmployeeId == updated.EmployeeId ? updated : s).ToList();
-        if (updated.EmployeeId == this.Profile?.EmployeeId)
-            this.MyStatus = updated;
-    }
-
-    /// <summary>Run something the user asked for, showing a spinner and the outcome.</summary>
-    private void Act(Func<CancellationToken, Task> work, Func<string>? notice = null)
-    {
-        Interlocked.Increment(ref this.busy);
-        this.Notice = null;
-        this.Background(
-            async () =>
+            if (character is { } c && !this.presenceRefused)
             {
-                await work(this.cts.Token);
-                this.Error = null;
-                if (notice != null)
-                    this.Notice = notice();
-            },
-            () => Interlocked.Decrement(ref this.busy));
-    }
+                var key = $"{c.Name}@{c.World}";
+                var changed = key != this.publishedCharacter;
+                if (this.Due("presence-write", now, TimeSpan.FromMinutes(10)) || changed)
+                {
+                    this.publishedCharacter = key;
+                    jobs.Add((_, ct) => this.PublishCharacter(c.Name, c.World, ct));
+                }
+            }
+        }
 
-    private void Background(Func<Task> work, Action? done = null)
-    {
+        if (jobs.Count == 0)
+        {
+            this.refreshing = 0;
+            return;
+        }
+
+        var started = this.session;
         Task.Run(async () =>
         {
             try
             {
-                await work();
-            }
-            catch (OperationCanceledException)
-            {
-            }
-            catch (ApolloApiException e)
-            {
-                this.Error = e.Message;
-            }
-            catch (Exception e)
-            {
-                this.Error = "Something went wrong inside the plugin. See /xllog for details.";
-                Plugin.Log.Error(e, "Apollo background task failed");
+                foreach (var job in jobs)
+                {
+                    if (started != this.session)
+                        break;
+                    await this.Guarded(() => job(started, this.cts.Token), quiet: true);
+                }
             }
             finally
             {
-                done?.Invoke();
+                this.refreshing = 0;
             }
         });
     }
-}
 
-public enum View
-{
-    Hr,
-    Reception,
-    Security,
-    Other,
+    /// <summary>Refresh the open tab on the next frame.</summary>
+    public void RefreshSoon()
+    {
+        lock (this.due)
+        {
+            foreach (var key in this.due.Keys.Where(k => k is not ("account" or "presence-write")).ToList())
+                this.due.Remove(key);
+        }
+    }
+
+    public void SignIn(string email, string password) => this.Act(async ct =>
+    {
+        var s = await this.client.SignInAsync(email.Trim(), password, ct);
+        this.config.Uid = s.Uid;
+        this.config.Email = s.Email;
+        this.config.RefreshToken = s.RefreshToken;
+        this.config.Save();
+        this.Forget();
+        this.Notice = "Signed in.";
+    });
+
+    public void SignOut()
+    {
+        this.client.SignOut();
+        this.config.Uid = this.config.RefreshToken = "";
+        this.config.Save();
+        this.Forget();
+    }
+
+    /// <summary>Clock in or out through the web app, exactly as Hermes' slash commands do.</summary>
+    /// <param name="action">clockin, clockout, pfclockin or pfclockout.</param>
+    /// <param name="kind">For pfclockin: pf, shout or both.</param>
+    public void Clock(string action, string kind = "") => this.Act(async ct =>
+    {
+        var s = this.session;
+        var result = await this.client.CallAsync("pluginClock", new JsonObject { ["action"] = action, ["kind"] = kind }, ct);
+        var message = result.ValueKind == JsonValueKind.Object && result.TryGetProperty("message", out var m) ? m.GetString() : null;
+        await this.RefreshMe(s, true, ct);
+        this.Notice = Plain(message ?? "Done.");
+    });
+
+    public void SetCollabNight(bool on) => this.Act(async ct =>
+    {
+        await this.client.SetAsync("night/collab", new Dictionary<string, object?>
+        {
+            ["on"] = on, ["by"] = this.MyName, ["at"] = NowMs(),
+        }, ct);
+        this.CollabNight = on;
+        this.Notice = on
+            ? $"Collab night is on: hourly pay x{this.Config.CollabRate:0.##}, and Reception takes no bookings."
+            : "Collab night is off.";
+    });
+
+    public void MarkReviewed(ClockReview review) => this.Act(async ct =>
+    {
+        await this.client.DeleteAsync($"clockReviews/{review.Id}", ct);
+        this.Reviews = this.Reviews.Where(r => r.Id != review.Id).ToList();
+        this.Notice = $"Marked {review.Name}'s clock as reviewed.";
+    });
+
+    public void TakeReception() => this.Act(async ct =>
+    {
+        var name = this.MyName;
+        await this.client.PatchAsync("night/reception", new Dictionary<string, object?> { ["receptionist"] = name }, ct);
+        this.Receptionist = name;
+        this.Notice = "You are tonight's receptionist: the reception bonus goes to you.";
+    });
+
+    public void CreateBooking(string employee, string patron, string rpType, double hours, int guests, bool vip, string location, Action onSuccess) =>
+        this.Act(async ct =>
+        {
+            var s = this.session;
+            var id = NewId();
+            var now = NowMs();
+
+            // the same row the site's Reception page makes: the clock starts when the duration goes in
+            await this.client.CreateAsync("reception", id, new Dictionary<string, object?>
+            {
+                ["order"] = now, ["employee"] = employee, ["rpType"] = rpType, ["duration"] = hours,
+                ["guests"] = (double)guests, ["vip"] = vip, ["location"] = location, ["timeIn"] = now,
+            }, ct);
+
+            // patron names are kept apart from the booking, for staff only
+            if (patron.Length > 0)
+                await this.client.CreateAsync("patrons", id, new Dictionary<string, object?> { ["name"] = patron, ["order"] = now }, ct);
+
+            await this.RefreshMe(s, true, ct);
+            this.Notice = employee.Length > 0 ? $"Booked {employee}{(patron.Length > 0 ? $" for {patron}" : "")}." : "Booking added.";
+            onSuccess();
+        });
+
+    public void AddWarning(string name, string world, string reason, Action onSuccess) => this.Act(async ct =>
+    {
+        var now = NowMs();
+        var fields = new Dictionary<string, object?>
+        {
+            ["name"] = name, ["world"] = world, ["reason"] = reason,
+            ["by"] = this.MyName, ["byUid"] = this.client.Session!.Uid, ["at"] = now, ["order"] = now,
+        };
+        var id = NewId();
+        try
+        {
+            await this.client.CreateAsync("warnings", id, fields, ct);
+        }
+        catch (ApolloException e) when (e.Kind == ApolloError.Denied)
+        {
+            throw new ApolloException("The web app can't store warnings yet: its plugin update needs deploying first.");
+        }
+
+        this.Warnings = [new PatronWarning(new Doc(id, fields)), .. this.Warnings];
+        this.Notice = $"Warning logged for {name}. Remember to post proof in the Discord security channel.";
+        onSuccess();
+    });
+
+    /// <summary>Tell the rest of security that a blacklisted player is in the venue.</summary>
+    public void ReportSighting(Ban ban, string name, string world)
+    {
+        var uid = this.client.Session?.Uid;
+        if (uid == null || this.SecurityStoreMissing)
+            return;
+        _ = this.Guarded(
+            () => this.client.CreateAsync("sightings", NewId(), new Dictionary<string, object?>
+            {
+                ["name"] = name, ["world"] = world, ["ban"] = Clip(ban.Reason.Length > 0 ? ban.Reason : ban.Notes, 300),
+                ["by"] = this.MyName, ["byUid"] = uid, ["at"] = NowMs(),
+            }, this.cts.Token),
+            quiet: true);
+    }
+
+    public void StartDiscordLink() => this.Act(async ct =>
+    {
+        var result = await this.client.CallAsync("discordLinkCode", [], ct);
+        if (result.TryGetProperty("linked", out var linked) && linked.ValueKind == JsonValueKind.True)
+        {
+            this.DueNow("account");
+            this.Notice = "Your Discord is already linked.";
+            return;
+        }
+
+        this.DiscordCode = (result.GetProperty("code").GetString()!, DateTimeOffset.FromUnixTimeMilliseconds(result.GetProperty("expires").GetInt64()));
+    });
+
+    public void UnlinkDiscord() => this.Act(async ct =>
+    {
+        await this.client.CallAsync("discordUnlink", [], ct);
+        this.DiscordName = null;
+        this.Notice = "Unlinked. Hermes no longer knows your Discord.";
+    });
+
+    private static double NowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+    private static string Clip(string s, int max) => s.Length <= max ? s : s[..max];
+
+    // ids shaped like the site's own (newId in public/index.html)
+    private static string NewId()
+    {
+        const string digits = "0123456789abcdefghijklmnopqrstuvwxyz";
+        var n = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var time = "";
+        for (; n > 0; n /= 36)
+            time = digits[(int)(n % 36)] + time;
+        return "x" + time + string.Concat(Enumerable.Range(0, 5).Select(_ => digits[Random.Shared.Next(36)]));
+    }
+
+    /// <summary>Hermes words his replies for Discord: drop the markup and the sentences about slash commands.</summary>
+    private static string Plain(string message) =>
+        SlashSentence().Replace(message, "").Replace("**", "").Replace("`", "").Trim();
+
+    [GeneratedRegex(@"\s*[^.!]*`/\w+`[^.!]*[.!]")]
+    private static partial Regex SlashSentence();
+
+    private bool Due(string key, DateTimeOffset now, TimeSpan every)
+    {
+        lock (this.due)
+        {
+            if (this.due.TryGetValue(key, out var at) && now < at)
+                return false;
+            this.due[key] = now + every;
+            return true;
+        }
+    }
+
+    private void DueNow(string key)
+    {
+        lock (this.due)
+            this.due.Remove(key);
+    }
+
+    private void Forget()
+    {
+        this.session++;
+        lock (this.due)
+            this.due.Clear();
+        this.myRowId = null;
+        this.publishedCharacter = null;
+        this.presenceRefused = false;
+        this.Access = null;
+        this.MyRow = null;
+        this.CollabNight = false;
+        this.Receptionist = "";
+        this.Bookings = [];
+        this.Buyouts = [];
+        this.Roster = [];
+        this.Reviews = [];
+        this.Bans = [];
+        this.Warnings = [];
+        this.Sightings = [];
+        this.Presence = new Dictionary<string, Presence>();
+        this.DiscordName = null;
+        this.DiscordCode = null;
+        this.SecurityStoreMissing = false;
+        this.Error = null;
+        this.Notice = null;
+    }
+
+    private async Task RefreshAccount(int s, CancellationToken ct)
+    {
+        var uid = this.client.Session!.Uid;
+        var cfg = new VenueConfig(await this.client.GetAsync("config/main", ct));
+        var account = await this.client.GetAsync($"accounts/{uid}", ct);
+        var discord = await this.client.GetAsync($"discordLinks/{uid}", ct);
+        if (s != this.session)
+            return;
+
+        this.Config = cfg;
+        this.Access = new Access(uid, account, cfg);
+        this.DiscordName = discord == null ? null : discord.Str("name") is { Length: > 0 } n ? n : discord.Str("username");
+        if (discord != null)
+            this.DiscordCode = null;
+        this.Error = null;
+    }
+
+    private async Task RefreshMe(int s, bool withBuyouts, CancellationToken ct)
+    {
+        var uid = this.client.Session!.Uid;
+
+        // this login's row on the roster: the one tied to it (the administrator's is picked in Settings)
+        Doc? row = null;
+        if (this.myRowId != null)
+            row = await this.client.GetAsync($"hr/{this.myRowId}", ct);
+        if (row == null || (row.Str("login") != uid && this.Config.AdminRoster != row.Id))
+        {
+            row = uid == Access.AdminUid && this.Config.AdminRoster.Length > 0
+                ? await this.client.GetAsync($"hr/{this.Config.AdminRoster}", ct)
+                : (await this.client.WhereAsync("hr", "login", uid, ct)).FirstOrDefault();
+        }
+
+        var collab = await this.client.GetAsync("night/collab", ct);
+        var night = await this.client.GetAsync("night/reception", ct);
+        var reception = await this.client.ListAsync("reception", ct);
+        var patrons = (await this.client.ListAsync("patrons", ct)).ToDictionary(p => p.Id, p => p.Str("name"));
+        var buyouts = withBuyouts ? await this.client.ListAsync("buyouts", ct) : null;
+        if (s != this.session)
+            return;
+
+        this.myRowId = row?.Id;
+        this.MyRow = row != null ? new HrRow(row) : null;
+        this.CollabNight = collab?.Bool("on") == true;
+        this.Receptionist = night?.Str("receptionist") ?? "";
+        this.Bookings = reception
+            .OrderBy(r => r.Num("order") ?? 0)
+            .Select(r => new Booking(r, patrons.GetValueOrDefault(r.Id) ?? "", Venue.ReceptionTotal(this.Config, r)))
+            .ToList();
+        this.Buyouts = buyouts ?? this.Buyouts;
+        this.Error = null;
+    }
+
+    private async Task RefreshRoster(int s, bool withReviews, CancellationToken ct)
+    {
+        var rows = await this.client.ListAsync("hr", ct);
+        var reviews = withReviews ? await this.client.ListAsync("clockReviews", ct) : null;
+        if (s != this.session)
+            return;
+
+        // in the order of the HR page: by job as Settings lists them, then by name
+        var jobOrder = this.Config.Jobs.Select((j, i) => (j.Name, i)).ToDictionary(x => x.Name, x => x.i);
+        this.Roster = rows.Select(r => new HrRow(r)).Where(r => r.Name.Length > 0)
+            .OrderBy(r => jobOrder.GetValueOrDefault(r.Job, int.MaxValue)).ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (reviews != null)
+            this.Reviews = reviews.Select(r => new ClockReview(r)).OrderByDescending(r => r.At).ToList();
+    }
+
+    private async Task RefreshPresence(int s, CancellationToken ct)
+    {
+        try
+        {
+            var docs = await this.client.ListAsync("presence", ct);
+            if (s == this.session)
+                this.Presence = docs.Select(d => new Presence(d)).ToDictionary(p => p.Uid);
+        }
+        catch (ApolloException e) when (e.Kind == ApolloError.Denied)
+        {
+            // not deployed yet: tells fall back to finding the character nearby
+        }
+    }
+
+    private async Task RefreshBans(int s, CancellationToken ct)
+    {
+        var docs = await this.client.ListAsync("bans", ct);
+        if (s == this.session)
+            this.Bans = docs.Select(d => new Ban(d)).Where(b => b.Name.Length > 0).ToList();
+    }
+
+    private async Task RefreshWarnings(int s, CancellationToken ct)
+    {
+        try
+        {
+            var docs = await this.client.ListAsync("warnings", ct, orderBy: "at desc", limit: 200);
+            if (s != this.session)
+                return;
+            this.Warnings = docs.Select(d => new PatronWarning(d)).ToList();
+            this.SecurityStoreMissing = false;
+        }
+        catch (ApolloException e) when (e.Kind == ApolloError.Denied)
+        {
+            this.SecurityStoreMissing = true;
+        }
+    }
+
+    private async Task RefreshSightings(int s, CancellationToken ct)
+    {
+        try
+        {
+            var docs = await this.client.ListAsync("sightings", ct, orderBy: "at desc", limit: 20);
+            if (s == this.session)
+                this.Sightings = docs.Select(d => new Sighting(d)).ToList();
+        }
+        catch (ApolloException e) when (e.Kind == ApolloError.Denied)
+        {
+            this.SecurityStoreMissing = true;
+        }
+    }
+
+    private async Task PublishCharacter(string name, string world, CancellationToken ct)
+    {
+        try
+        {
+            await this.client.SetAsync($"presence/{this.client.Session!.Uid}", new Dictionary<string, object?>
+            {
+                ["name"] = name, ["world"] = world, ["at"] = NowMs(),
+            }, ct);
+        }
+        catch (ApolloException e) when (e.Kind == ApolloError.Denied)
+        {
+            this.presenceRefused = true;
+        }
+    }
+
+    /// <summary>Run something the user asked for, showing a spinner and the outcome.</summary>
+    private void Act(Func<CancellationToken, Task> work)
+    {
+        Interlocked.Increment(ref this.busy);
+        this.Notice = null;
+        Task.Run(async () =>
+        {
+            try
+            {
+                if (await this.Guarded(() => work(this.cts.Token), quiet: false))
+                    this.Error = null;
+            }
+            finally
+            {
+                Interlocked.Decrement(ref this.busy);
+            }
+        });
+    }
+
+    private async Task<bool> Guarded(Func<Task> work, bool quiet)
+    {
+        try
+        {
+            await work();
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (ApolloException e) when (e.Kind == ApolloError.SignedOut && this.IsSignedIn)
+        {
+            // the saved sign-in no longer works (password changed, login switched off): forget it
+            this.SignOut();
+            this.Error = e.Message;
+        }
+        catch (ApolloException e)
+        {
+            this.Error = e.Message;
+        }
+        catch (Exception e)
+        {
+            if (!quiet)
+                this.Error = "Something went wrong inside the plugin. See /xllog for details.";
+            Plugin.Log.Error(e, "Apollo background task failed");
+        }
+
+        return false;
+    }
 }

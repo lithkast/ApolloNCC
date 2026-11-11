@@ -1,0 +1,32 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Download Dalamud
+        run: |
+          curl -fsSL -o dalamud.zip https://goatcorp.github.io/dalamud-distrib/latest.zip
+          unzip -q dalamud.zip -d "$RUNNER_TEMP/dalamud"
+          echo "DALAMUD_HOME=$RUNNER_TEMP/dalamud" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: dotnet build -c Release
+
+      # The zip inside this artifact is what gets installed into the game.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ApolloNCC
+          path: ApolloNCC/bin/x64/Release/ApolloNCC/
+          if-no-files-found: error

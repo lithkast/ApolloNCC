@@ -1,0 +1,10 @@
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <Version>0.1.0.0</Version>
+    <Authors>Apollo Night Club and Casino</Authors>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>ApolloNCC</RootNamespace>
+    <AssemblyName>ApolloNCC</AssemblyName>
+  </PropertyGroup>
+</Project>

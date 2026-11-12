@@ -28,6 +28,9 @@ public sealed class Alerts
     private readonly HashSet<string> sightingsAnnounced = [];
     private readonly Dictionary<string, DateTimeOffset> lastSeen = new(StringComparer.OrdinalIgnoreCase);
 
+    private readonly Dictionary<string, int> casinoReminded = [];
+    private double raffleYelledAt;
+
     private DateTimeOffset nextScan = DateTimeOffset.MinValue;
     private IReadOnlyList<Ban>? indexedFrom;
     private ILookup<string, Ban> byPlayer = Array.Empty<Ban>().ToLookup(b => b.Player);
@@ -50,6 +53,8 @@ public sealed class Alerts
 
         if (this.config.BookingTimeUpAlerts)
             this.CheckBookings(now);
+        this.CheckCasino(access, now);
+        this.CheckRaffleWinner(access, now);
 
         if (this.config.BannedPatronAlerts && access.IsSecurity)
         {
@@ -90,6 +95,55 @@ public sealed class Alerts
             Print(text, Gold);
         }
     }
+
+    /// <summary>Every two hours on a casino shift, remind a dealer who has not entered their game's profit yet.</summary>
+    private void CheckCasino(Access access, DateTimeOffset now)
+    {
+        if (this.state.Casino is not { } casino)
+            return;
+
+        foreach (var e in casino.Entries)
+        {
+            if (e.Uid != access.Uid || e.Profit != null)
+                continue;
+
+            var periods = (int)((now - e.At).TotalHours / 2);
+            if (periods < 1 || periods > 4 || this.casinoReminded.GetValueOrDefault(e.Key) >= periods)
+                continue;
+
+            this.casinoReminded[e.Key] = periods;
+            var text = $"Casino shift {e.Shift}: time to enter your profit{(e.Game.Length > 0 ? $" for {e.Game}" : "")}.";
+            Plugin.ToastGui.ShowQuest(text);
+            Print(text, Gold);
+        }
+    }
+
+    /// <summary>
+    /// When this login drew the raffle (from the plugin, the site or Hermes), yell the winner in game. Only the
+    /// person who drew it yells, so the venue hears it once however many owners have the plugin open.
+    /// </summary>
+    private void CheckRaffleWinner(Access access, DateTimeOffset now)
+    {
+        if (this.state.Raffle.Winner is not { } w || w.ByUid != access.Uid || w.At <= this.raffleYelledAt)
+            return;
+
+        this.raffleYelledAt = w.At;
+
+        // a winner drawn a while ago (the plugin was just opened) is old news
+        if (now.ToUnixTimeMilliseconds() - w.At > 120_000)
+            return;
+        try
+        {
+            GameChat.SendLine(RaffleYell(w));
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+        {
+            Plugin.Log.Warning(e, "Could not yell the raffle winner");
+        }
+    }
+
+    public static string RaffleYell(RaffleWinner w) =>
+        $"/y The 50/50 raffle winner is {w.Patron}! They take home {Venue.Gil(w.Pot)}. Congratulations!";
 
     /// <summary>Banned players reported by other staff's plugins, so everyone on security hears about it.</summary>
     private void CheckSightings(Access access)

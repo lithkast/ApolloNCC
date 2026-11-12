@@ -14,10 +14,13 @@ public sealed class MainWindow : Window
     private readonly ReceptionTab reception;
     private readonly SecurityTab security;
     private readonly SettingsTab settings;
+    private readonly BarTab bar;
+    private readonly CasinoTab casino;
+    private readonly RaffleTab raffle;
 
     private bool jumpToSettings;
 
-    public MainWindow(Configuration config, ApolloState state, Alerts alerts)
+    public MainWindow(Configuration config, ApolloState state, Alerts alerts, MacroRunner macros)
         : base("Apollo Night Club & Casino###ApolloNCC")
     {
         this.state = state;
@@ -25,6 +28,9 @@ public sealed class MainWindow : Window
         this.reception = new ReceptionTab(state);
         this.security = new SecurityTab(state, alerts);
         this.settings = new SettingsTab(config, state);
+        this.bar = new BarTab(state, macros);
+        this.casino = new CasinoTab(state);
+        this.raffle = new RaffleTab(state, macros);
 
         this.SizeConstraints = new WindowSizeConstraints
         {
@@ -39,6 +45,8 @@ public sealed class MainWindow : Window
     public View CurrentView { get; private set; } = View.Hr;
 
     public void ShowSettings() => this.jumpToSettings = true;
+
+    public void Dispose() => this.bar.Dispose();
 
     public override void PreDraw() => Theme.Push();
 
@@ -58,9 +66,13 @@ public sealed class MainWindow : Window
                 if (access?.CanUseReception == true)
                     this.Tab("Reception", View.Reception, () => this.reception.Draw(access));
                 this.Tab("Security", View.Security, () => this.Gate(this.security.Draw));
-                this.Tab("Bar", View.Other, () => ComingSoon("Bar", "Bar buyouts and tab tracking"));
-                this.Tab("Casino", View.Other, () => ComingSoon("Casino", "Casino tracking"));
-                this.Tab("Raffle", View.Other, () => ComingSoon("Raffle", "Raffle ticket sales and draws"));
+                this.Tab("Bar", View.Bar, () => this.Gate(this.bar.Draw));
+                if (access?.CanViewCasino == true)
+                    this.Tab("Casino", View.Casino, () => this.casino.Draw(access));
+
+                // the raffle is the owners' and co-owners'
+                if (access?.IsOwner == true)
+                    this.Tab("Raffle", View.Raffle, () => this.raffle.Draw(access));
 
                 var flags = this.jumpToSettings ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None;
                 this.jumpToSettings = false;
@@ -71,12 +83,6 @@ public sealed class MainWindow : Window
 
         ImGui.EndChild();
         this.DrawFooter();
-    }
-
-    private static void ComingSoon(string name, string what)
-    {
-        Theme.Section(name);
-        Theme.Muted($"{what} will live here. This section has not been built yet.");
     }
 
     private void Tab(string label, View view, Action draw, ImGuiTabItemFlags flags = ImGuiTabItemFlags.None)

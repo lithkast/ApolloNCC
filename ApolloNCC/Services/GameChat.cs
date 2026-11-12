@@ -19,6 +19,12 @@ public static unsafe class GameChat
         Execute($"/tell {name}@{world} {message}");
     }
 
+    /// <summary>
+    /// Sends one line as if typed into the chat box: a command such as "/y ..." or "/em ...". Must run on the
+    /// framework thread. The text comes from the web app (macros kept by the owners and managers), never from patrons.
+    /// </summary>
+    public static void SendLine(string line) => Execute(line);
+
     private static bool IsSafeName(string value)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 32)

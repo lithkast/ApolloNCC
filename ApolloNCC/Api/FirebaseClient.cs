@@ -194,6 +194,26 @@ public sealed class FirebaseClient : IDisposable
         return this.WriteAsync(HttpMethod.Patch, $"{this.documentsUrl}/{path}{mask}", fields, ct);
     }
 
+    /// <summary>
+    /// Sets, or with a null value removes, one entry of a map field, leaving the rest of the map alone. This is how
+    /// several people each keep their own line in one document without overwriting each other's.
+    /// </summary>
+    /// <param name="key">Letters, digits and underscores only.</param>
+    public Task PatchMapEntryAsync(string path, string map, string key, IReadOnlyDictionary<string, object?>? value, CancellationToken ct)
+    {
+        foreach (var c in key)
+        {
+            if (!(char.IsAsciiLetterOrDigit(c) || c == '_'))
+                throw new ArgumentException("Map keys are letters, digits and underscores.");
+        }
+
+        var inner = new Dictionary<string, object?>();
+        if (value != null)
+            inner[key] = value;
+        var url = $"{this.documentsUrl}/{path}?updateMask.fieldPaths={Uri.EscapeDataString($"{map}.{key}")}";
+        return this.WriteAsync(HttpMethod.Patch, url, new Dictionary<string, object?> { [map] = inner }, ct);
+    }
+
     public async Task DeleteAsync(string path, CancellationToken ct)
     {
         using var response = await this.AuthedAsync(() => new HttpRequestMessage(HttpMethod.Delete, $"{this.documentsUrl}/{path}"), ct).ConfigureAwait(false);

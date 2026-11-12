@@ -33,21 +33,25 @@ two alert switches.
 | HR | Every staff login | Clock in / out and PF clock in / out (party finder, shouts or both), with tonight's hours and pay worked out as the site does: shift pay, promotion pay, booking fees, reception bonus, bar buyout share. Your bookings with time left. Managers and assistant managers also see their department; owners and co-owners see everyone, Hermes' "to review" list, and the collab-night switch. |
 | Reception | Logins that can edit Reception on the site | Add a booking (patron can be filled from your target), see the total and the reception bonus, put yourself down as tonight's receptionist, send a staff member a "time's up" tell. Edit a booking (extend the hours, change guests, VIP or room) or remove it. |
 | Security | Everyone (Blacklist); bouncers, their managers, owners (the rest) | Blacklist search, current bookings, patron warnings (logins that can edit the Blacklist on the site can also remove one), alerts when a blacklisted player is nearby. |
-| Bar, Casino, Raffle | Everyone | Placeholders. Not built yet. |
+| Bar | Every staff login | The menu by section: pick a drink to see its picture, price, in-game item, description and preparation macro. "Say it" announces the drink in /say; "Make it" plays the preparation macro in chat. Bar managers and owners record a bar buyout (it quotes what to collect and how the bartenders split it) and can remove one. |
+| Casino | Logins that can see Casino on the site | A dealer picks a shift and a game, goes on shift, and enters the game's profit once (a reminder comes every two hours). Each shift's gross profit and dealer list on the site are worked out from those lines, and the dealer's share shows here and in their HR total. The dealer manager and owners assign dealers, correct games and profits, and remove lines. |
+| Raffle | Owners and co-owners | Starting pot, add tickets (from target or typed, with an optional Discord name and whether the gil was collected), close and reopen, Raffle Pick (Hermes draws and announces the winner; the plugin yells it), and the announcement macro. |
 | Settings | Everyone | Sign in / out, Discord link code for Hermes, alert switches. |
 
-Not built yet: shouts and macros, VIP lookup, bar buyouts, casino tracking, raffle.
+Not built yet: shouts, the dealer / reception / host macro sets, VIP lookup.
 
 ## What the web app needs
 
-Reading everything, bookings, the collab switch and the Discord link work against the site
-as it is. Three things need the `claude/bold-darwin-r1e7rd` branch of the web app deployed
-(`functions/index.js`, `functions/clock.js`, `firestore.rules`):
+Reading everything, bookings, the collab switch, the bar, the casino and the Discord link
+work against the site as it is. These need the `claude/bold-darwin-r1e7rd` branch of the web
+app deployed:
 
 - the clock buttons (a `pluginClock` function)
 - patron warnings and telling the rest of security about a banned player (`warnings` and
   `sightings` collections)
 - tells reaching someone who is on an alt (`presence` collection)
+- the raffle's starting pot, close / reopen and Raffle Pick (`night/raffle`, a `rafflePick`
+  function, and Hermes' `/raffle...` commands)
 
 Until then the plugin says so where it matters instead of failing silently.
 

@@ -15,6 +15,9 @@ public enum View
     Hr,
     Reception,
     Security,
+    Bar,
+    Casino,
+    Raffle,
     Other,
 }
 
@@ -56,6 +59,12 @@ public sealed partial class ApolloState : IDisposable
     public IReadOnlyList<PatronWarning> Warnings { get; private set; } = [];
     public IReadOnlyList<Sighting> Sightings { get; private set; } = [];
     public IReadOnlyDictionary<string, Presence> Presence { get; private set; } = new Dictionary<string, Presence>();
+    public IReadOnlyList<MenuItem> Menu { get; private set; } = [];
+    public bool MenuLoaded { get; private set; }
+    public IReadOnlyList<Buyout> BuyoutList { get; private set; } = [];
+    public CasinoNight? Casino { get; private set; }
+    public IReadOnlyList<RaffleEntry> RaffleEntries { get; private set; } = [];
+    public RaffleNight Raffle { get; private set; } = new(null);
     public string? DiscordName { get; private set; }
     public (string Code, DateTimeOffset Expires)? DiscordCode { get; private set; }
 
@@ -91,7 +100,7 @@ public sealed partial class ApolloState : IDisposable
 
     public ShiftSummary? MySummary(DateTimeOffset now) =>
         this.MyRow is { } row
-            ? Venue.WithExtras(Venue.Summarise(this.Config, row, this.CollabNight, now), this.Config, row.Name, this.Bookings, this.Receptionist, this.Buyouts)
+            ? Venue.WithExtras(Venue.Summarise(this.Config, row, this.CollabNight, now), this.Config, row.Name, this.Bookings, this.Receptionist, this.Buyouts, this.Casino)
             : null;
 
     /// <summary>Called every frame. Starts a background refresh of whatever is due.</summary>
@@ -114,12 +123,20 @@ public sealed partial class ApolloState : IDisposable
             if (this.Due("me", now, TimeSpan.FromSeconds(open || working ? 30 : 120)))
                 jobs.Add((s, ct) => this.RefreshMe(s, open, ct));
 
-            var wantsRoster = (view == View.Hr && access.SeesStaff) || (view == View.Reception && access.CanUseReception);
+            // the roster: HR's staff list, Reception's and the casino's pick lists, and who is tending bar for a buyout
+            var wantsRoster = (view == View.Hr && access.SeesStaff) || (view == View.Reception && access.CanUseReception)
+                              || (view == View.Bar && access.CanEditBar) || (view == View.Casino && access.ManagesCasino);
             if (wantsRoster && this.Due("roster", now, TimeSpan.FromSeconds(view == View.Hr ? 30 : 90)))
                 jobs.Add((s, ct) => this.RefreshRoster(s, view == View.Hr && access.IsOwner, ct));
 
             if (view == View.Reception && access.CanUseReception && this.Due("presence", now, TimeSpan.FromSeconds(60)))
                 jobs.Add(this.RefreshPresence);
+
+            // the menu carries a picture for each item, so it is fetched only for the Bar tab, and seldom
+            if (view == View.Bar && this.Due("menu", now, TimeSpan.FromMinutes(10)))
+                jobs.Add(this.RefreshMenu);
+            if (view == View.Raffle && access.IsOwner && this.Due("raffle", now, TimeSpan.FromSeconds(15)))
+                jobs.Add(this.RefreshRaffle);
 
             var watching = access.IsSecurity && bannedAlerts;
             if ((view == View.Security || watching) && this.Due("bans", now, view == View.Security ? TimeSpan.FromMinutes(1) : TimeSpan.FromMinutes(10)))
@@ -288,6 +305,145 @@ public sealed partial class ApolloState : IDisposable
         this.Notice = $"Warning for {warning.Name} removed.";
     });
 
+    /// <summary>Record a bar buyout at what it costs right now, as the site's Bar page does.</summary>
+    public void RecordBuyout(string patron) => this.Act(async ct =>
+    {
+        var s = this.session;
+        if (this.CollabNight)
+            throw new ApolloException("There are no bar buyouts on a collab night.");
+        var q = Venue.QuoteBuyout(this.Config, DateTimeOffset.UtcNow, this.Roster)
+                ?? throw new ApolloException("Apollo is closed, so there is no buyout to record.");
+        await this.client.CreateAsync("buyouts", NewId(), new Dictionary<string, object?>
+        {
+            ["order"] = NowMs(), ["patron"] = patron, ["hours"] = (double)q.Hours, ["amount"] = q.Amount, ["house"] = q.House,
+            ["pool"] = q.Pool, ["bartenders"] = q.Bartenders.Cast<object?>().ToList(), ["each"] = q.Each, ["by"] = this.MyName,
+        }, ct);
+        await this.RefreshMe(s, true, ct);
+        this.Notice = $"Buyout recorded{(patron.Length > 0 ? $" for {patron}" : "")}: collect {Venue.Gil(q.Amount)}.";
+    });
+
+    public void RemoveBuyout(Buyout buyout) => this.Act(async ct =>
+    {
+        var s = this.session;
+        await this.client.DeleteAsync($"buyouts/{buyout.Id}", ct);
+        await this.RefreshMe(s, true, ct);
+        this.Notice = "Buyout removed.";
+    });
+
+    /// <summary>
+    /// Puts a dealer on a casino shift, or changes their game or profit. Each dealer has one line per shift; the
+    /// shift's gross profit and dealer list on the site's Casino page are then worked out from the lines.
+    /// </summary>
+    /// <param name="profit">Null leaves the profit as it is (or not entered yet).</param>
+    public void SaveCasinoEntry(HrRow dealer, int shift, string game, double? profit, string done) => this.Act(async ct =>
+    {
+        var s = this.session;
+        var key = CasinoKey(dealer, shift);
+        var existing = this.Casino?.Entries.FirstOrDefault(e => e.Key == key);
+        await this.client.PatchMapEntryAsync("night/casino", "entries", key, new Dictionary<string, object?>
+        {
+            ["name"] = dealer.Name, ["uid"] = dealer.Login, ["shift"] = (double)shift, ["game"] = game,
+            ["profit"] = profit ?? existing?.Profit,
+            ["at"] = existing != null ? (double)existing.At.ToUnixTimeMilliseconds() : NowMs(),
+            ["by"] = this.MyName,
+        }, ct);
+        await this.SettleCasino(s, ct);
+        this.Notice = done;
+    });
+
+    /// <summary>A manager taking a profit back off a line (entered by mistake), so the dealer can enter it again.</summary>
+    public void ClearCasinoProfit(HrRow dealer, CasinoEntry entry, string game) => this.Act(async ct =>
+    {
+        var s = this.session;
+        await this.client.PatchMapEntryAsync("night/casino", "entries", entry.Key, new Dictionary<string, object?>
+        {
+            ["name"] = dealer.Name, ["uid"] = dealer.Login, ["shift"] = (double)entry.Shift, ["game"] = game,
+            ["profit"] = null, ["at"] = (double)entry.At.ToUnixTimeMilliseconds(), ["by"] = this.MyName,
+        }, ct);
+        await this.SettleCasino(s, ct);
+        this.Notice = $"{entry.Name}'s profit cleared.";
+    });
+
+    public void RemoveCasinoEntry(CasinoEntry entry) => this.Act(async ct =>
+    {
+        var s = this.session;
+        await this.client.PatchMapEntryAsync("night/casino", "entries", entry.Key, null, ct);
+        await this.SettleCasino(s, ct, entry.Shift);
+        this.Notice = $"{entry.Name} is off shift {entry.Shift}.";
+    });
+
+    public void SetRaffleStart(double amount) => this.Act(async ct =>
+    {
+        await this.RaffleNightPatch(new Dictionary<string, object?> { ["start"] = amount > 0 ? amount : null }, ct);
+        await this.RefreshRaffle(this.session, ct);
+        this.Notice = amount > 0 ? $"The pot starts at {Venue.Gil(amount)}." : "The pot starts empty.";
+    });
+
+    public void AddRaffleEntry(string patron, string world, string discord, int tickets, bool paid, Action onSuccess) => this.Act(async ct =>
+    {
+        var s = this.session;
+        if (this.Raffle.Closed)
+            throw new ApolloException("The raffle is closed. Reopen it to sell more tickets.");
+        await this.client.CreateAsync("raffle", NewId(), new Dictionary<string, object?>
+        {
+            ["order"] = NowMs(), ["patron"] = patron, ["world"] = world, ["discord"] = discord,
+            ["tickets"] = (double)tickets, ["takenBy"] = paid ? this.MyName : "", ["paid"] = paid,
+        }, ct);
+        await this.RefreshRaffle(s, ct);
+        this.Notice = $"{patron}: {tickets} ticket{(tickets == 1 ? "" : "s")}, {Venue.Gil(tickets * this.Config.RaffleTicketPrice)}{(paid ? "" : " still to collect")}.";
+        onSuccess();
+    });
+
+    public void SetRafflePaid(RaffleEntry entry, bool paid) => this.Act(async ct =>
+    {
+        await this.client.PatchAsync($"raffle/{entry.Id}", new Dictionary<string, object?>
+        {
+            ["paid"] = paid, ["takenBy"] = paid ? (entry.TakenBy.Length > 0 ? entry.TakenBy : this.MyName) : "",
+        }, ct);
+        await this.RefreshRaffle(this.session, ct);
+    });
+
+    public void RemoveRaffleEntry(RaffleEntry entry) => this.Act(async ct =>
+    {
+        await this.client.DeleteAsync($"raffle/{entry.Id}", ct);
+        await this.RefreshRaffle(this.session, ct);
+        this.Notice = $"{entry.Patron}'s tickets removed.";
+    });
+
+    public void SetRaffleClosed(bool closed) => this.Act(async ct =>
+    {
+        // reopening forgets a winner already drawn, so the raffle can be drawn again
+        await this.RaffleNightPatch(closed
+            ? new Dictionary<string, object?> { ["closed"] = true, ["closedAt"] = NowMs(), ["closedBy"] = this.MyName }
+            : new Dictionary<string, object?> { ["closed"] = false, ["winner"] = null }, ct);
+        await this.RefreshRaffle(this.session, ct);
+        this.Notice = closed ? "The raffle is closed: no more tickets." : "The raffle is open again.";
+    });
+
+    /// <summary>Hermes draws the winner on the web app (every ticket is one chance) and announces it in Discord.</summary>
+    public void PickRaffleWinner() => this.Act(async ct =>
+    {
+        var s = this.session;
+        var result = await this.client.CallAsync("rafflePick", [], ct);
+        await this.RefreshRaffle(s, ct);
+        var announced = result.ValueKind == JsonValueKind.Object && result.TryGetProperty("announced", out var a) && a.ValueKind == JsonValueKind.True;
+        this.Notice = this.Raffle.Winner is { } w
+            ? $"The winner is {w.Patron}: {Venue.Gil(w.Pot)}. {(announced ? "Hermes has announced it in Discord." : "Hermes could not announce it: type /rafflechannel in the Discord channel for winners.")}"
+            : "The winner is drawn.";
+    });
+
+    /// <summary>Empties the raffle for a new night: every entry, the closed mark and the winner. The starting pot stays.</summary>
+    public void ClearRaffle() => this.Act(async ct =>
+    {
+        var s = this.session;
+        foreach (var e in this.RaffleEntries)
+            await this.client.DeleteAsync($"raffle/{e.Id}", ct);
+        if (this.Raffle.Closed || this.Raffle.Winner != null)
+            await this.RaffleNightPatch(new Dictionary<string, object?> { ["closed"] = false, ["winner"] = null }, ct);
+        await this.RefreshRaffle(s, ct);
+        this.Notice = "The raffle is cleared.";
+    });
+
     public void AddWarning(string name, string world, string reason, Action onSuccess) => this.Act(async ct =>
     {
         var now = NowMs();
@@ -399,6 +555,12 @@ public sealed partial class ApolloState : IDisposable
         this.Receptionist = "";
         this.Bookings = [];
         this.Buyouts = [];
+        this.BuyoutList = [];
+        this.Menu = [];
+        this.MenuLoaded = false;
+        this.Casino = null;
+        this.RaffleEntries = [];
+        this.Raffle = new RaffleNight(null);
         this.Roster = [];
         this.Reviews = [];
         this.Bans = [];
@@ -449,8 +611,16 @@ public sealed partial class ApolloState : IDisposable
         var reception = await this.client.ListAsync("reception", ct);
         var patrons = (await this.client.ListAsync("patrons", ct)).ToDictionary(p => p.Id, p => p.Str("name"));
         var buyouts = withBuyouts ? await this.client.ListAsync("buyouts", ct) : null;
+        var access = this.Access;
+        var casino = access?.CanViewCasino == true ? new CasinoNight(await this.client.GetAsync("night/casino", ct)) : null;
+
+        // owners keep an eye on the raffle so the plugin can yell a winner drawn from Discord
+        var raffle = access?.IsOwner == true ? await this.GetRaffleNight(ct) : null;
         if (s != this.session)
             return;
+
+        this.Casino = casino;
+        this.Raffle = raffle ?? this.Raffle;
 
         this.myRowId = row?.Id;
         this.MyRow = row != null ? new HrRow(row) : null;
@@ -461,7 +631,90 @@ public sealed partial class ApolloState : IDisposable
             .Select(r => new Booking(r, patrons.GetValueOrDefault(r.Id) ?? "", Venue.ReceptionTotal(this.Config, r)))
             .ToList();
         this.Buyouts = buyouts ?? this.Buyouts;
+        this.BuyoutList = this.Buyouts.Select(b => new Buyout(b)).Where(b => b.Amount > 0).OrderBy(b => b.At).ToList();
         this.Error = null;
+    }
+
+    private static string CasinoKey(HrRow dealer, int shift) =>
+        $"s{shift}_{new string(dealer.Id.Where(char.IsAsciiLetterOrDigit).ToArray())}";
+
+    /// <summary>
+    /// After a dealer's line changes: bring each shift's gross profit and dealer list (what the site's Casino page
+    /// and Hermes read) in step with the lines. A shift nobody has a line on is left as the site has it, unless its
+    /// last line was just removed.
+    /// </summary>
+    private async Task SettleCasino(int s, CancellationToken ct, int? emptiedShift = null)
+    {
+        var night = new CasinoNight(await this.client.GetAsync("night/casino", ct));
+        var fix = new Dictionary<string, object?>();
+        for (var shift = 1; shift <= 2; shift++)
+        {
+            var lines = night.Entries.Where(e => e.Shift == shift).ToList();
+            if (lines.Count == 0 && shift != emptiedShift)
+                continue;
+
+            var names = lines.Select(e => e.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            double? gross = lines.Any(e => e.Profit != null) ? lines.Sum(e => e.Profit ?? 0) : null;
+            if (!names.SequenceEqual(night.Dealers[shift - 1]))
+                fix[$"s{shift}Dealers"] = names.Cast<object?>().ToList();
+            if (gross != night.Gross[shift - 1])
+                fix[$"s{shift}Gross"] = gross;
+        }
+
+        if (fix.Count > 0)
+        {
+            await this.client.PatchAsync("night/casino", fix, ct);
+            night = new CasinoNight(await this.client.GetAsync("night/casino", ct));
+        }
+
+        if (s == this.session)
+            this.Casino = night;
+    }
+
+    private async Task RefreshMenu(int s, CancellationToken ct)
+    {
+        var items = await this.client.ListAsync("menu", ct);
+        var macros = (await this.client.ListAsync("barmacros", ct)).ToDictionary(m => m.Id, m => m.Str("text"));
+        if (s != this.session)
+            return;
+        this.Menu = items.Select(m => new MenuItem(m, macros.GetValueOrDefault(m.Id) ?? ""))
+            .Where(m => m.Name.Length > 0).OrderBy(m => m.Order).ToList();
+        this.MenuLoaded = true;
+    }
+
+    private async Task RefreshRaffle(int s, CancellationToken ct)
+    {
+        var rows = await this.client.ListAsync("raffle", ct);
+        var night = await this.GetRaffleNight(ct);
+        if (s != this.session)
+            return;
+        this.RaffleEntries = rows.Select(r => new RaffleEntry(r)).OrderBy(r => r.Order).ToList();
+        this.Raffle = night;
+    }
+
+    private async Task RaffleNightPatch(Dictionary<string, object?> fields, CancellationToken ct)
+    {
+        try
+        {
+            await this.client.PatchAsync("night/raffle", fields, ct);
+        }
+        catch (ApolloException e) when (e.Kind == ApolloError.Denied)
+        {
+            throw new ApolloException("The web app can't do this yet: its raffle update needs deploying first.");
+        }
+    }
+
+    private async Task<RaffleNight> GetRaffleNight(CancellationToken ct)
+    {
+        try
+        {
+            return new RaffleNight(await this.client.GetAsync("night/raffle", ct));
+        }
+        catch (ApolloException e) when (e.Kind == ApolloError.Denied)
+        {
+            // the web app's raffle update is not deployed yet
+            return new RaffleNight(null);
+        }
     }
 
     private async Task RefreshRoster(int s, bool withReviews, CancellationToken ct)

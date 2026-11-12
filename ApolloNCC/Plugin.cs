@@ -18,13 +18,14 @@ public sealed class Plugin : IDalamudPlugin
     private readonly ApolloState state;
     private readonly Alerts alerts;
     private readonly MainWindow mainWindow;
+    private readonly MacroRunner macros = new();
 
     public Plugin()
     {
         this.config = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         this.state = new ApolloState(this.config);
         this.alerts = new Alerts(this.config, this.state);
-        this.mainWindow = new MainWindow(this.config, this.state, this.alerts);
+        this.mainWindow = new MainWindow(this.config, this.state, this.alerts, this.macros);
         this.windows.AddWindow(this.mainWindow);
 
         CommandManager.AddHandler(Command, new CommandInfo(this.OnCommand)
@@ -47,6 +48,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static ITargetManager TargetManager { get; private set; } = null!;
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
     [PluginService] internal static IToastGui ToastGui { get; private set; } = null!;
+    [PluginService] internal static ITextureProvider TextureProvider { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     public void Dispose()
@@ -57,6 +59,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi -= this.OpenSettings;
         CommandManager.RemoveHandler(Command);
         this.windows.RemoveAllWindows();
+        this.mainWindow.Dispose();
         this.state.Dispose();
     }
 
@@ -75,6 +78,7 @@ public sealed class Plugin : IDalamudPlugin
         var now = DateTimeOffset.UtcNow;
         this.state.Tick(now, this.mainWindow.IsOpen ? this.mainWindow.CurrentView : null, character, this.config.BannedPatronAlerts);
         this.alerts.Tick(now);
+        this.macros.Tick(now);
     }
 
     private void OnCommand(string command, string args)

@@ -112,6 +112,7 @@ public sealed class HrTab(ApolloState state)
         Extra("Booking fees", summary.Bookings);
         Extra("Reception bonus", summary.ReceptionBonus);
         Extra("Bar buyout share", summary.BarShare);
+        Extra("Dealer share", summary.DealerShare);
         if (extras)
             Theme.EndStats();
 

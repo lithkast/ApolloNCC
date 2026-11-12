@@ -79,6 +79,17 @@ public sealed class Access
     /// <summary>Whoever keeps the Blacklist on the site (security's managers and the owners) can remove a warning.</summary>
     public bool CanRemoveWarnings => this.CanEdit("bans");
 
+    /// <summary>The bar's managers and the owners: record buyouts.</summary>
+    public bool CanEditBar => this.CanEdit("bar");
+
+    public bool CanViewCasino => this.IsAdmin || (this.tabs.GetValueOrDefault("casino") is double level && level >= 1);
+
+    /// <summary>Dealers, their managers and the owners put their own shift on the casino sheet.</summary>
+    public bool CanEditCasino => this.CanEdit("casino");
+
+    /// <summary>The dealers' managers and the owners assign dealers and correct profits.</summary>
+    public bool ManagesCasino => this.CanEditCasino && (this.IsOwner || this.Department == "dealer");
+
     /// <summary>Owners and co-owners switch collab nights and clear Hermes' review list.</summary>
     public bool CanChangeNight => this.IsAdmin || (this.IsOwner && !this.maintenance);
 

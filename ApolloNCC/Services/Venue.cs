@@ -34,6 +34,10 @@ public sealed record ShiftSummary
     public double Total => (this.ShiftPay ?? 0) + this.PromoPay + this.Bookings + this.ReceptionBonus + this.BarShare + this.DealerShare;
 }
 
+public sealed record BuyoutQuote(int Hours, double SecondsLeft, double Amount, double House, double Pool, List<string> Bartenders, double? Each);
+
+public sealed record RaffleTotals(double Tickets, int People, double Start, double Total, double ClubCut, double WinnerCut, int Unpaid);
+
 /// <summary>
 /// Venue time and pay sums. These mirror functions/clock.js and the "spreadsheet formulas" in public/index.html,
 /// so the plugin shows the same figures as the site. If those change, change these.
@@ -206,8 +210,10 @@ public static class Venue
     /// <summary>Adds booking fees, the reception bonus and the bar buyout share someone earned tonight.</summary>
     /// <param name="receptionist">Tonight's receptionist (night/reception).</param>
     /// <param name="buyouts">Tonight's bar buyouts.</param>
+    /// <param name="casino">Tonight's casino sheet, when this login may read it.</param>
     public static ShiftSummary WithExtras(
-        ShiftSummary s, VenueConfig cfg, string name, IReadOnlyList<Booking> bookings, string receptionist, IReadOnlyList<Doc> buyouts)
+        ShiftSummary s, VenueConfig cfg, string name, IReadOnlyList<Booking> bookings, string receptionist, IReadOnlyList<Doc> buyouts,
+        CasinoNight? casino = null)
     {
         bool Me(string? x) => name.Length > 0 && string.Equals(x?.Trim(), name, StringComparison.OrdinalIgnoreCase);
 
@@ -219,7 +225,98 @@ public static class Venue
             BarShare = Math.Round(buyouts
                 .Where(b => b.Num("each") != null && b.List("bartenders").Any(x => Me(x as string)))
                 .Sum(b => b.Num("each")!.Value)),
+            DealerShare = casino != null ? Math.Round(DealerShare(cfg, casino, name)) : 0,
         };
+    }
+
+    /// <summary>The dealers' pool for one shift: only the slice of profit inside each bracket earns that bracket's rate.</summary>
+    public static double? DealerPool(VenueConfig cfg, double? gross)
+    {
+        if (gross is not { } g)
+            return null;
+        if (g <= 0)
+            return 0;
+        double prev = 0, pool = 0;
+        foreach (var (upTo, rate) in cfg.CasinoBrackets)
+        {
+            var cap = upTo ?? double.PositiveInfinity;
+            if (g > prev)
+                pool += (Math.Min(g, cap) - prev) * rate;
+            prev = cap;
+        }
+
+        return pool;
+    }
+
+    /// <summary>What one dealer has made at the tables tonight: an even share of the pool of each shift they are on.</summary>
+    public static double DealerShare(VenueConfig cfg, CasinoNight casino, string name)
+    {
+        double total = 0;
+        for (var i = 0; i < 2; i++)
+        {
+            var dealers = casino.Dealers[i];
+            var mine = dealers.Count(d => name.Length > 0 && string.Equals(d.Trim(), name, StringComparison.OrdinalIgnoreCase));
+            if (mine > 0 && DealerPool(cfg, casino.Gross[i]) is { } pool)
+                total += pool / dealers.Count * mine;
+        }
+
+        return total;
+    }
+
+    /// <summary>What a bar buyout would cost right now, or null while the doors are closed.</summary>
+    public static BuyoutQuote? QuoteBuyout(VenueConfig cfg, DateTimeOffset now, IEnumerable<HrRow> roster)
+    {
+        if (SecondsUntilClose(cfg, now) is not { } left)
+            return null;
+
+        // part of an hour counts as a whole one, and the price is always a whole number of millions
+        var hours = (int)Math.Ceiling(left / 3600);
+        var amount = Math.Ceiling(hours * cfg.BarBuyoutRate / 1e6) * 1e6;
+        var pool = Math.Round(amount * cfg.BarSplit);
+        var bartenders = roster
+            .Where(r => r.Job == "Bartender" && r.Name.Length > 0 && (r.ClockIn || r.TimeIn != null) && !r.ClockOut && r.TimeOut == null)
+            .Select(r => r.Name).ToList();
+        return new BuyoutQuote(hours, left, amount, Math.Round(amount * cfg.HouseSplit), pool, bartenders,
+            bartenders.Count > 0 ? Math.Floor(pool / bartenders.Count / 1000) * 1000 : null);
+    }
+
+    /// <summary>Apollo opens on Sundays: seconds left until close while the doors are open, else null.</summary>
+    public static double? SecondsUntilClose(VenueConfig cfg, DateTimeOffset now)
+    {
+        if (!TimeSpan.TryParse(cfg.StartTime, out var s) || !TimeSpan.TryParse(cfg.CloseTime, out var c))
+            return null;
+        double start = s.TotalSeconds, close = c.TotalSeconds;
+        var t = VenueTime(cfg, now);
+        var sec = Math.Floor(t.TimeOfDay.TotalSeconds);
+        var pastMidnight = close <= start;   // 9:00 PM to 1:00 AM runs into Monday
+        double? left = null;
+        if (t.DayOfWeek == DayOfWeek.Sunday && sec >= start && (pastMidnight || sec < close))
+            left = pastMidnight ? 86400 - sec + close : close - sec;
+        else if (pastMidnight && t.DayOfWeek == DayOfWeek.Monday && sec < close)
+            left = close - sec;
+        return left > 0 ? left : null;
+    }
+
+    /// <summary>The raffle's sums. The club takes its cut of ticket sales only, never of the starting pot.</summary>
+    public static RaffleTotals Raffle(VenueConfig cfg, IEnumerable<RaffleEntry> entries, RaffleNight night)
+    {
+        var counted = entries.Where(e => e.Tickets > 0 && e.Patron.Length > 0).ToList();
+        var tickets = counted.Sum(e => e.Tickets);
+        var sales = tickets * cfg.RaffleTicketPrice;
+        var club = sales * cfg.RaffleClubCut;
+        return new RaffleTotals(tickets, counted.Count, night.Start, night.Start + sales, club, night.Start + sales - club, counted.Count(e => !e.Paid));
+    }
+
+    /// <summary>The announcement macro with tonight's pot and the ticket price filled in, as the site does.</summary>
+    public static string FillRaffleMacro(VenueConfig cfg, double total)
+    {
+        var price = cfg.RaffleTicketPrice;
+        var shortPrice = price >= 1e6 && price % 1e5 == 0 ? (price / 1e6).ToString(CultureInfo.InvariantCulture) + "m"
+            : price >= 1000 && price % 1000 == 0 ? (price / 1000).ToString(CultureInfo.InvariantCulture) + "k"
+            : Gil(price);
+        return cfg.RaffleMacro
+            .Replace("{total}", Math.Round(total).ToString("N0", CultureInfo.InvariantCulture))
+            .Replace("{price}", shortPrice);
     }
 
     private static bool PromoFresh(HrRow r, DateTimeOffset now) =>

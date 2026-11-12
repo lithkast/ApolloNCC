@@ -55,11 +55,12 @@ with `DALAMUD_HOME`).
 dotnet build -c Release
 ```
 
-The installable zip lands in `ApolloNCC/bin/x64/Release/ApolloNCC/latest.zip`. Every push
-also builds on GitHub Actions; the zip is in the run's `ApolloNCC` artifact.
+Every push also builds on GitHub Actions. The run's `ApolloNCC` artifact is a ready-to-use
+folder: `ApolloNCC.dll`, its manifest, and `images/icon.png` (the logo).
 
-To load it in game for testing: `/xlsettings` > Experimental > Dev Plugin Locations, add
-the path to the built `ApolloNCC.dll`, then enable it under `/xlplugins` > Dev Tools.
+To load it in game: unzip the artifact into a folder that stays put, then in
+`/xlsettings` > Experimental > Dev Plugin Locations add the full path to `ApolloNCC.dll`,
+and enable it under `/xlplugins` > Dev Tools > Installed Dev Plugins.
 
 ## Layout
 

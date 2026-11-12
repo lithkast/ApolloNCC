@@ -1,10 +1,15 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
     <Version>0.1.0.0</Version>
-    <Authors>Apollo Night Club and Casino</Authors>
+    <Authors>Eris Descordia</Authors>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>ApolloNCC</RootNamespace>
     <AssemblyName>ApolloNCC</AssemblyName>
   </PropertyGroup>
+
+  <!-- The plugin's logo in the plugin installer. Dalamud looks for images/icon.png beside the DLL. -->
+  <ItemGroup>
+    <Content Include="images\icon.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

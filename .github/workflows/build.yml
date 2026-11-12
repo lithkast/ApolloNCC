@@ -24,9 +24,14 @@ jobs:
       - name: Build
         run: dotnet build -c Release
 
-      # The zip inside this artifact is what gets installed into the game.
+      # Unzip this artifact into a folder and point Dalamud's Dev Plugin Locations at ApolloNCC.dll.
+      # images/icon.png beside the DLL is the logo the plugin installer shows.
       - uses: actions/upload-artifact@v4
         with:
           name: ApolloNCC
-          path: ApolloNCC/bin/x64/Release/ApolloNCC/
+          path: |
+            ApolloNCC/bin/x64/Release/ApolloNCC.dll
+            ApolloNCC/bin/x64/Release/ApolloNCC.json
+            ApolloNCC/bin/x64/Release/ApolloNCC.deps.json
+            ApolloNCC/bin/x64/Release/images/
           if-no-files-found: error

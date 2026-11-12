@@ -21,6 +21,15 @@ public sealed class ReceptionTab(ApolloState state)
     private string location = "";
     private string? tellResult;
 
+    // the booking being changed in the Edit popup, and the one whose Remove button is waiting for a second click
+    private string editId = "";
+    private double editHours;
+    private int editGuests;
+    private bool editVip;
+    private string editLocation = "";
+    private string confirmRemoveId = "";
+    private DateTimeOffset confirmRemoveUntil;
+
     public void Draw(Access access)
     {
         var cfg = state.Config;
@@ -57,7 +66,7 @@ public sealed class ReceptionTab(ApolloState state)
         BookingTable.Draw(
             "reception", state.Bookings, now,
             BookingTable.Columns.Employee | BookingTable.Columns.Patron | BookingTable.Columns.Type | BookingTable.Columns.Total,
-            b => this.DrawTell(b, now));
+            b => this.DrawActions(b, now));
         if (this.tellResult != null)
             Theme.Muted(this.tellResult);
     }
@@ -155,10 +164,140 @@ public sealed class ReceptionTab(ApolloState state)
         }
     }
 
+    private void DrawActions(Booking b, DateTimeOffset now)
+    {
+        this.DrawTell(b, now);
+        ImGui.SameLine();
+
+        if (ImGui.SmallButton("Edit"))
+        {
+            this.editId = b.Id;
+            this.editHours = b.Hours ?? 1;
+            this.editGuests = (int)(b.Guests ?? 1);
+            this.editVip = b.Vip;
+            this.editLocation = b.Location;
+            ImGui.OpenPopup("edit");
+        }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Change the hours (to extend their time), guests, VIP or room.");
+        this.DrawEditPopup(b, now);
+
+        // removing takes two clicks, so a slip of the mouse can't lose a booking
+        ImGui.SameLine();
+        var confirming = this.confirmRemoveId == b.Id && now < this.confirmRemoveUntil;
+        ImGui.BeginDisabled(state.Busy);
+        if (confirming)
+            ImGui.PushStyleColor(ImGuiCol.Button, Theme.Bad with { W = 0.45f });
+        if (ImGui.SmallButton(confirming ? "Click again" : "Remove"))
+        {
+            if (confirming)
+            {
+                state.RemoveBooking(b);
+                this.confirmRemoveId = "";
+            }
+            else
+            {
+                this.confirmRemoveId = b.Id;
+                this.confirmRemoveUntil = now.AddSeconds(4);
+            }
+        }
+
+        if (confirming)
+            ImGui.PopStyleColor();
+        ImGui.EndDisabled();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Takes this booking off the Reception page. It no longer counts towards tonight's total or the bonus.");
+    }
+
+    private void DrawEditPopup(Booking b, DateTimeOffset now)
+    {
+        if (!ImGui.BeginPopup("edit"))
+            return;
+
+        var cfg = state.Config;
+        ImGui.TextColored(Theme.Gold, b.Patron.Length > 0 ? $"{b.Patron} with {(b.Employee.Length > 0 ? b.Employee : "no staff")}" : b.Employee);
+        ImGui.Spacing();
+
+        ImGui.SetNextItemWidth(120 * Theme.Scale);
+        ImGui.InputDouble("Hours", ref this.editHours, 0.5, 1, "%.2f");
+        this.editHours = Math.Clamp(this.editHours, 0.25, 24);
+        ImGui.SameLine();
+        if (ImGui.SmallButton("+30 min"))
+            this.editHours = Math.Min(this.editHours + 0.5, 24);
+        ImGui.SameLine();
+        if (ImGui.SmallButton("+1 hour"))
+            this.editHours = Math.Min(this.editHours + 1, 24);
+
+        ImGui.SetNextItemWidth(120 * Theme.Scale);
+        ImGui.InputInt("Guests", ref this.editGuests, 1, 1);
+        this.editGuests = Math.Clamp(this.editGuests, 1, 99);
+        ImGui.Checkbox("VIP", ref this.editVip);
+
+        ImGui.SetNextItemWidth(200 * Theme.Scale);
+        if (cfg.Rooms.Count == 0)
+        {
+            ImGui.InputText("Room", ref this.editLocation, 60);
+        }
+        else if (ImGui.BeginCombo("Room", this.editLocation.Length > 0 ? this.editLocation : "Choose room"))
+        {
+            foreach (var r in cfg.Rooms)
+            {
+                if (ImGui.Selectable(r, r == this.editLocation))
+                    this.editLocation = r;
+            }
+
+            ImGui.EndCombo();
+        }
+
+        // what the change does, before it is saved
+        ImGui.Spacing();
+        var price = Venue.ReceptionTotal(cfg, b.RpType, this.editHours, this.editGuests, this.editVip);
+        Theme.Muted("Patron pays");
+        ImGui.SameLine();
+        ImGui.TextColored(Theme.GoldBright, Venue.Gil(price));
+        if (price is { } p && b.Total is { } was && Math.Abs(p - was) >= 1)
+        {
+            ImGui.SameLine();
+            Theme.Muted($"({(p > was ? "+" : "-")}{Venue.Gil(Math.Abs(p - was))})");
+        }
+
+        if (b.StartsAt is { } start)
+        {
+            var left = start.AddHours(this.editHours) - now;
+            Theme.Muted("Time left");
+            ImGui.SameLine();
+            if (left > TimeSpan.Zero)
+                ImGui.TextUnformatted(Theme.Clock(left));
+            else
+                ImGui.TextColored(Theme.Bad, "already up");
+        }
+
+        ImGui.Spacing();
+        ImGui.BeginDisabled(state.Busy);
+        if (ImGui.Button("Save"))
+        {
+            state.UpdateBooking(b, this.editHours, this.editGuests, this.editVip, this.editLocation.Trim());
+            ImGui.CloseCurrentPopup();
+        }
+
+        ImGui.EndDisabled();
+        ImGui.SameLine();
+        if (ImGui.Button("Cancel"))
+            ImGui.CloseCurrentPopup();
+        ImGui.EndPopup();
+    }
+
     private void DrawTell(Booking b, DateTimeOffset now)
     {
         if (b.Employee.Length == 0)
+        {
+            // keep Edit and Remove lined up on rooms rented without staff
+            ImGui.BeginDisabled();
+            ImGui.SmallButton("Tell: time's up");
+            ImGui.EndDisabled();
             return;
+        }
 
         var isMe = string.Equals(b.Employee, state.MyName, StringComparison.OrdinalIgnoreCase);
         var target = isMe ? null : this.FindCharacter(b.Employee, now);

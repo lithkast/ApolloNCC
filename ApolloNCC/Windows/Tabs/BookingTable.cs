@@ -50,7 +50,7 @@ public static class BookingTable
             ImGui.TableSetupColumn("Patron pays", ImGuiTableColumnFlags.None, 1.4f);
         ImGui.TableSetupColumn("Time left", ImGuiTableColumnFlags.None, 1.2f);
         if (actions != null)
-            ImGui.TableSetupColumn("##actions", ImGuiTableColumnFlags.None, 1.8f);
+            ImGui.TableSetupColumn("##actions", ImGuiTableColumnFlags.None, 3.4f);
         ImGui.TableHeadersRow();
 
         foreach (var b in rows)

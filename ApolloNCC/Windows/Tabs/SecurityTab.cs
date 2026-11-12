@@ -15,6 +15,8 @@ public sealed class SecurityTab(ApolloState state, Alerts alerts)
     private string warnName = "";
     private string warnWorld = "";
     private string warnReason = "";
+    private string confirmRemoveId = "";
+    private DateTimeOffset confirmRemoveUntil;
 
     public void Draw(Access access)
     {
@@ -148,18 +150,24 @@ public sealed class SecurityTab(ApolloState state, Alerts alerts)
             return;
         }
 
-        if (!ImGui.BeginTable("warnings", 4, TableFlags))
+        var canRemove = state.Access?.CanRemoveWarnings == true;
+        if (!ImGui.BeginTable("warnings", canRemove ? 5 : 4, TableFlags))
             return;
 
         ImGui.TableSetupColumn("Patron", ImGuiTableColumnFlags.None, 2.4f);
         ImGui.TableSetupColumn("Reason", ImGuiTableColumnFlags.None, 4f);
         ImGui.TableSetupColumn("Given by", ImGuiTableColumnFlags.None, 1.8f);
         ImGui.TableSetupColumn("When", ImGuiTableColumnFlags.None, 1.6f);
+        if (canRemove)
+            ImGui.TableSetupColumn("##remove", ImGuiTableColumnFlags.None, 1.2f);
         ImGui.TableHeadersRow();
+        var now = DateTimeOffset.UtcNow;
         foreach (var w in warnings)
         {
+            ImGui.PushID(w.Id);
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
+            ImGui.AlignTextToFramePadding();
             ImGui.TextUnformatted(Theme.PersonAt(w.Name, w.World));
             var count = warnings.Count(o => SamePatron(o, w));
             if (count > 1)
@@ -174,6 +182,35 @@ public sealed class SecurityTab(ApolloState state, Alerts alerts)
             ImGui.TextUnformatted(w.By);
             ImGui.TableNextColumn();
             Theme.Muted($"{w.At.LocalDateTime:g}");
+
+            if (canRemove)
+            {
+                // two clicks, so a warning can't be lost to a slip of the mouse
+                ImGui.TableNextColumn();
+                var confirming = this.confirmRemoveId == w.Id && now < this.confirmRemoveUntil;
+                ImGui.BeginDisabled(state.Busy);
+                if (confirming)
+                    ImGui.PushStyleColor(ImGuiCol.Button, Theme.Bad with { W = 0.45f });
+                if (ImGui.SmallButton(confirming ? "Click again" : "Remove"))
+                {
+                    if (confirming)
+                    {
+                        state.RemoveWarning(w);
+                        this.confirmRemoveId = "";
+                    }
+                    else
+                    {
+                        this.confirmRemoveId = w.Id;
+                        this.confirmRemoveUntil = now.AddSeconds(4);
+                    }
+                }
+
+                if (confirming)
+                    ImGui.PopStyleColor();
+                ImGui.EndDisabled();
+            }
+
+            ImGui.PopID();
         }
 
         ImGui.EndTable();

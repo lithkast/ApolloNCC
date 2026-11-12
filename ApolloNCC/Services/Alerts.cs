@@ -80,7 +80,7 @@ public sealed class Alerts
     {
         foreach (var booking in this.state.MyBookings)
         {
-            if (booking.EndsAt is not { } end || end > now || now - end > TimeUpWindow || !this.timeUpAnnounced.Add(booking.Id))
+            if (booking.EndsAt is not { } end || end > now || now - end > TimeUpWindow || !this.timeUpAnnounced.Add($"{booking.Id}@{end.ToUnixTimeSeconds()}"))
                 continue;
 
             var who = booking.Patron.Length > 0 ? $" with {booking.Patron}" : "";

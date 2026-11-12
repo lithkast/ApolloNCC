@@ -76,6 +76,9 @@ public sealed class Access
     /// <summary>Bouncers, their managers and the owners: bookings, warnings and banned-patron alerts.</summary>
     public bool IsSecurity => this.IsOwner || this.Role is "bouncer" or "mgr_bouncer" or "asst_bouncer";
 
+    /// <summary>Whoever keeps the Blacklist on the site (security's managers and the owners) can remove a warning.</summary>
+    public bool CanRemoveWarnings => this.CanEdit("bans");
+
     /// <summary>Owners and co-owners switch collab nights and clear Hermes' review list.</summary>
     public bool CanChangeNight => this.IsAdmin || (this.IsOwner && !this.maintenance);
 

@@ -257,6 +257,37 @@ public sealed partial class ApolloState : IDisposable
             onSuccess();
         });
 
+    /// <summary>Change a booking that is already on the page, e.g. when the patron extends their time.</summary>
+    public void UpdateBooking(Booking booking, double hours, int guests, bool vip, string location) => this.Act(async ct =>
+    {
+        var s = this.session;
+
+        // the clock keeps running from when the booking started: only the length changes
+        await this.client.PatchAsync($"reception/{booking.Id}", new Dictionary<string, object?>
+        {
+            ["duration"] = hours, ["guests"] = (double)guests, ["vip"] = vip, ["location"] = location,
+        }, ct);
+        await this.RefreshMe(s, true, ct);
+        this.Notice = $"Booking updated{(booking.Patron.Length > 0 ? $" for {booking.Patron}" : "")}: {Venue.HoursText(hours)}.";
+    });
+
+    /// <summary>Take a booking off the Reception page, with its patron's name. It no longer counts towards tonight's total.</summary>
+    public void RemoveBooking(Booking booking) => this.Act(async ct =>
+    {
+        var s = this.session;
+        await this.client.DeleteAsync($"reception/{booking.Id}", ct);
+        await this.client.DeleteAsync($"patrons/{booking.Id}", ct);
+        await this.RefreshMe(s, true, ct);
+        this.Notice = "Booking removed.";
+    });
+
+    public void RemoveWarning(PatronWarning warning) => this.Act(async ct =>
+    {
+        await this.client.DeleteAsync($"warnings/{warning.Id}", ct);
+        this.Warnings = this.Warnings.Where(w => w.Id != warning.Id).ToList();
+        this.Notice = $"Warning for {warning.Name} removed.";
+    });
+
     public void AddWarning(string name, string world, string reason, Action onSuccess) => this.Act(async ct =>
     {
         var now = NowMs();

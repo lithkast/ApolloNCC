@@ -20,8 +20,8 @@ two alert switches.
 | Tab | Who sees it | What it does |
 | --- | --- | --- |
 | HR | Every staff login | Clock in / out and PF clock in / out (party finder, shouts or both), with tonight's hours and pay worked out as the site does: shift pay, promotion pay, booking fees, reception bonus, bar buyout share. Your bookings with time left. Managers and assistant managers also see their department; owners and co-owners see everyone, Hermes' "to review" list, and the collab-night switch. |
-| Reception | Logins that can edit Reception on the site | Add a booking (patron can be filled from your target), see the total and the reception bonus, put yourself down as tonight's receptionist, send a staff member a "time's up" tell. |
-| Security | Everyone (Blacklist); bouncers, their managers, owners (the rest) | Blacklist search, current bookings, patron warnings, alerts when a blacklisted player is nearby. |
+| Reception | Logins that can edit Reception on the site | Add a booking (patron can be filled from your target), see the total and the reception bonus, put yourself down as tonight's receptionist, send a staff member a "time's up" tell. Edit a booking (extend the hours, change guests, VIP or room) or remove it. |
+| Security | Everyone (Blacklist); bouncers, their managers, owners (the rest) | Blacklist search, current bookings, patron warnings (logins that can edit the Blacklist on the site can also remove one), alerts when a blacklisted player is nearby. |
 | Bar, Casino, Raffle | Everyone | Placeholders. Not built yet. |
 | Settings | Everyone | Sign in / out, Discord link code for Hermes, alert switches. |
 

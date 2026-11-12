@@ -3,6 +3,17 @@
 A Dalamud plugin for FFXIV made specifically for the Apollo Night Club and Casino venue.
 Staff only: you sign in with the same email and password you use on apolloncc.org.
 
+## Installing
+
+1. In game, type `/xlsettings` and open the **Experimental** tab.
+2. Under **Custom Plugin Repositories**, paste this link, click the plus, and save:
+
+   ```
+   https://github.com/lithkast/ApolloNCC/releases/latest/download/repo.json
+   ```
+
+3. Type `/xlplugins`, search for **ApolloNCC** and install it. Updates arrive like any other plugin's.
+
 Open it in game with `/apollo` (`/apollo settings` jumps to Settings).
 
 ## How it works
@@ -55,12 +66,14 @@ with `DALAMUD_HOME`).
 dotnet build -c Release
 ```
 
-Every push also builds on GitHub Actions. The run's `ApolloNCC` artifact is a ready-to-use
-folder: `ApolloNCC.dll`, its manifest, and `images/icon.png` (the logo).
+Every push builds on GitHub Actions (the `Build` workflow), as a check.
 
-To load it in game: unzip the artifact into a folder that stays put, then in
-`/xlsettings` > Experimental > Dev Plugin Locations add the full path to `ApolloNCC.dll`,
-and enable it under `/xlplugins` > Dev Tools > Installed Dev Plugins.
+## Releasing an update
+
+On GitHub: Actions > **Release** > Run workflow, with a version number higher than the last
+one (e.g. `0.1.1`) and a line about what changed. It builds that version and publishes it as
+a GitHub release; the link above always serves the latest release, so staff get the update
+from the plugin installer.
 
 ## Layout
 

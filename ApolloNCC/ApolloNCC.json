@@ -2,7 +2,7 @@
   "Author": "Eris Descordia",
   "Name": "ApolloNCC",
   "Punchline": "Staff tools for the Apollo Night Club and Casino venue.",
-  "Description": "A plugin made specifically for the Apollo Night Club and Casino venue. Staff only: requires an Apollo web app login and a plugin key issued by an owner.",
+  "Description": "A plugin made specifically for the Apollo Night Club and Casino venue. Staff only: sign in with your apolloncc.org login.",
   "ApplicableVersion": "any",
   "Tags": ["venue", "apollo", "hr", "roleplay"]
 }

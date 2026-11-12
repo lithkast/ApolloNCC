@@ -79,6 +79,9 @@ public sealed class Access
     /// <summary>Whoever keeps the Blacklist on the site (security's managers and the owners) can remove a warning.</summary>
     public bool CanRemoveWarnings => this.CanEdit("bans");
 
+    /// <summary>Owners, co-owners and Front of House's managers can run greeter mode.</summary>
+    public bool CanGreet => this.IsOwner || this.Department == "foh";
+
     /// <summary>The bar's managers and the owners: record buyouts.</summary>
     public bool CanEditBar => this.CanEdit("bar");
 

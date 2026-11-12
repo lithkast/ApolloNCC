@@ -19,13 +19,15 @@ public sealed class Plugin : IDalamudPlugin
     private readonly Alerts alerts;
     private readonly MainWindow mainWindow;
     private readonly MacroRunner macros = new();
+    private readonly Greeter greeter;
 
     public Plugin()
     {
         this.config = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         this.state = new ApolloState(this.config);
         this.alerts = new Alerts(this.config, this.state);
-        this.mainWindow = new MainWindow(this.config, this.state, this.alerts, this.macros);
+        this.greeter = new Greeter(this.config, this.state, this.alerts);
+        this.mainWindow = new MainWindow(this.config, this.state, this.alerts, this.macros, this.greeter);
         this.windows.AddWindow(this.mainWindow);
 
         CommandManager.AddHandler(Command, new CommandInfo(this.OnCommand)
@@ -76,9 +78,10 @@ public sealed class Plugin : IDalamudPlugin
                 : null;
 
         var now = DateTimeOffset.UtcNow;
-        this.state.Tick(now, this.mainWindow.IsOpen ? this.mainWindow.CurrentView : null, character, this.config.BannedPatronAlerts);
+        this.state.Tick(now, this.mainWindow.IsOpen ? this.mainWindow.CurrentView : null, character, this.config.BannedPatronAlerts, this.greeter.Enabled);
         this.alerts.Tick(now);
         this.macros.Tick(now);
+        this.greeter.Tick(now);
     }
 
     private void OnCommand(string command, string args)

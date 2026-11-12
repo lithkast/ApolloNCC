@@ -20,14 +20,14 @@ public sealed class MainWindow : Window
 
     private bool jumpToSettings;
 
-    public MainWindow(Configuration config, ApolloState state, Alerts alerts, MacroRunner macros)
+    public MainWindow(Configuration config, ApolloState state, Alerts alerts, MacroRunner macros, Greeter greeter)
         : base("Apollo Night Club & Casino###ApolloNCC")
     {
         this.state = state;
         this.hr = new HrTab(state);
         this.reception = new ReceptionTab(state);
         this.security = new SecurityTab(state, alerts);
-        this.settings = new SettingsTab(config, state);
+        this.settings = new SettingsTab(config, state, greeter);
         this.bar = new BarTab(state, macros);
         this.casino = new CasinoTab(state);
         this.raffle = new RaffleTab(state, macros);

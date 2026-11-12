@@ -4,7 +4,7 @@ using Dalamud.Bindings.ImGui;
 
 namespace ApolloNCC.Windows.Tabs;
 
-public sealed class SettingsTab(Configuration config, ApolloState state)
+public sealed class SettingsTab(Configuration config, ApolloState state, Greeter greeter)
 {
     private string email = config.Email;
     private string password = "";
@@ -13,6 +13,7 @@ public sealed class SettingsTab(Configuration config, ApolloState state)
     {
         this.DrawAccount();
         this.DrawDiscord();
+        this.DrawGreeter();
         this.DrawAlerts();
     }
 
@@ -94,6 +95,61 @@ public sealed class SettingsTab(Configuration config, ApolloState state)
                 ImGui.SetClipboardText(code.Code);
             Theme.Muted($"Works once, for another {Theme.Clock(code.Expires - DateTimeOffset.UtcNow)}.");
         }
+    }
+
+    /// <summary>Greeter mode: a welcome tell for each arrival, run by one manager or owner at a time.</summary>
+    private void DrawGreeter()
+    {
+        if (state.Access?.CanGreet != true)
+            return;
+
+        Theme.Section("Greeter mode");
+        var now = DateTimeOffset.UtcNow;
+        var blocked = greeter.Blocked(now);
+        var on = greeter.Enabled;
+        ImGui.BeginDisabled((blocked != null && !on) || state.Busy);
+        if (ImGui.Checkbox("Send a welcome tell to everyone who comes into the venue", ref on))
+        {
+            if (on)
+                greeter.TurnOn(now);
+            else
+                greeter.TurnOff();
+        }
+
+        ImGui.EndDisabled();
+        if (blocked != null && !greeter.Enabled)
+            ImGui.TextColored(Theme.Warn, blocked);
+        else
+            ImGui.TextColored(greeter.Enabled ? Theme.Good : Theme.TextMuted, greeter.Status);
+
+        if (!greeter.Enabled && state.GreeterUid.Length > 0 && state.GreeterUid != state.Uid)
+            Theme.Muted($"{(state.GreeterName.Length > 0 ? state.GreeterName : "Someone")} is greeting tonight. Switching yours on takes over from them.");
+        if (greeter.GreetedTonight > 0)
+            Theme.Muted($"Greeted {greeter.GreetedTonight} tonight.");
+
+        ImGui.Spacing();
+        Theme.Muted("The welcome message. {name} becomes their first name.");
+        var message = config.GreeterMessage;
+        if (ImGui.InputTextMultiline("##greeting", ref message, 400, new System.Numerics.Vector2(-1, 64 * Theme.Scale)))
+            config.GreeterMessage = message;
+        if (ImGui.IsItemDeactivatedAfterEdit())
+            config.Save();
+
+        Theme.Muted("They will see:");
+        Theme.Wrapped(Theme.Text, greeter.MessageFor("Eris Descordia"));
+        if (config.GreeterMessage != Configuration.DefaultGreeterMessage)
+        {
+            if (ImGui.SmallButton("Use the standard message"))
+            {
+                config.GreeterMessage = Configuration.DefaultGreeterMessage;
+                config.Save();
+            }
+        }
+
+        ImGui.Spacing();
+        Theme.Wrapped(Theme.TextMuted,
+            "It only runs inside the venue while you're on the clock, and switches off when you clock out. Each guest is " +
+            "greeted once a night; staff and anyone on the blacklist are skipped, and so is everyone already inside when you switch it on.");
     }
 
     private void DrawAlerts()

@@ -275,6 +275,11 @@ public sealed class VenueConfig
         this.ClockEarlyMinutes = d.Map("clockRules").GetValueOrDefault("early") is double e and >= 0 ? e : 60;
         this.StartTime = d.Str("startTime") is { Length: > 0 } st ? st : "21:00";
         this.CloseTime = d.Str("closeTime") is { Length: > 0 } ct ? ct : "01:00";
+
+        // where the venue is in game (Settings on the site); used to tell whether a staff member is standing in it
+        var location = d.Map("location");
+        this.Ward = int.TryParse(location.GetValueOrDefault("ward") as string, out var ward) ? ward : null;
+        this.Plot = int.TryParse(location.GetValueOrDefault("plot") as string, out var plot) ? plot : null;
         this.BarSections = d.Fields.ContainsKey("barSections")
             ? d.List("barSections").OfType<string>().Select(x => x.Trim()).Where(x => x.Length > 0).Distinct().ToList()
             : ["Weekly Specials", "On Tap", "Cocktails", "Appetizers", "Entrees", "Desserts", "Tub Grub"];
@@ -314,6 +319,10 @@ public sealed class VenueConfig
     public double ClockEarlyMinutes { get; }
     public string StartTime { get; }
     public string CloseTime { get; }
+
+    /// <summary>The venue's ward and plot numbers as the game shows them (from 1), when Settings has them.</summary>
+    public int? Ward { get; }
+    public int? Plot { get; }
     public List<string> BarSections { get; }
 
     /// <summary>A bar buyout costs this much for each hour left until close.</summary>

@@ -24,6 +24,12 @@ public sealed class Configuration : IPluginConfiguration
 
     public bool BookingTimeUpAlerts { get; set; } = true;
 
+    /// <summary>What greeter mode tells each arrival. {name} becomes their first name.</summary>
+    public string GreeterMessage { get; set; } = DefaultGreeterMessage;
+
+    public const string DefaultGreeterMessage =
+        "Welcome to Apollo Night Club & Casino, {name}! We have dancers, a full bar, a casino and private rooms. Ask at reception to book, and enjoy your night!";
+
     public Session? SavedSession =>
         this.Uid.Length > 0 && this.RefreshToken.Length > 0 ? new Session(this.Uid, this.Email, this.RefreshToken) : null;
 

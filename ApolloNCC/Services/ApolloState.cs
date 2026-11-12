@@ -51,6 +51,12 @@ public sealed partial class ApolloState : IDisposable
     public HrRow? MyRow { get; private set; }
     public bool CollabNight { get; private set; }
     public string Receptionist { get; private set; } = "";
+
+    /// <summary>Whose plugin is greeting arrivals tonight (night/reception, greeterUid): one person at a time.</summary>
+    public string GreeterUid { get; private set; } = "";
+    public string GreeterName { get; private set; } = "";
+
+    public string Uid => this.client.Session?.Uid ?? "";
     public IReadOnlyList<Booking> Bookings { get; private set; } = [];
     public IReadOnlyList<Doc> Buyouts { get; private set; } = [];
     public IReadOnlyList<HrRow> Roster { get; private set; } = [];
@@ -106,7 +112,8 @@ public sealed partial class ApolloState : IDisposable
     /// <summary>Called every frame. Starts a background refresh of whatever is due.</summary>
     /// <param name="view">The open tab, or null when the window is closed.</param>
     /// <param name="character">"Name@World" of the logged-in character.</param>
-    public void Tick(DateTimeOffset now, View? view, (string Name, string World)? character, bool bannedAlerts)
+    /// <param name="greeting">Greeter mode is on, which needs the roster and the blacklist to know who not to greet.</param>
+    public void Tick(DateTimeOffset now, View? view, (string Name, string World)? character, bool bannedAlerts, bool greeting)
     {
         if (!this.IsSignedIn || Interlocked.Exchange(ref this.refreshing, 1) == 1)
             return;
@@ -125,7 +132,7 @@ public sealed partial class ApolloState : IDisposable
 
             // the roster: HR's staff list, Reception's and the casino's pick lists, and who is tending bar for a buyout
             var wantsRoster = (view == View.Hr && access.SeesStaff) || (view == View.Reception && access.CanUseReception)
-                              || (view == View.Bar && access.CanEditBar) || (view == View.Casino && access.ManagesCasino);
+                              || (view == View.Bar && access.CanEditBar) || (view == View.Casino && access.ManagesCasino) || greeting;
             if (wantsRoster && this.Due("roster", now, TimeSpan.FromSeconds(view == View.Hr ? 30 : 90)))
                 jobs.Add((s, ct) => this.RefreshRoster(s, view == View.Hr && access.IsOwner, ct));
 
@@ -138,12 +145,12 @@ public sealed partial class ApolloState : IDisposable
             if (view == View.Raffle && access.IsOwner && this.Due("raffle", now, TimeSpan.FromSeconds(15)))
                 jobs.Add(this.RefreshRaffle);
 
-            var watching = access.IsSecurity && bannedAlerts;
+            var watching = (access.IsSecurity && bannedAlerts) || greeting;
             if ((view == View.Security || watching) && this.Due("bans", now, view == View.Security ? TimeSpan.FromMinutes(1) : TimeSpan.FromMinutes(10)))
                 jobs.Add(this.RefreshBans);
             if (view == View.Security && access.IsSecurity && this.Due("warnings", now, TimeSpan.FromSeconds(30)))
                 jobs.Add(this.RefreshWarnings);
-            if (access.IsSecurity && (watching || view == View.Security) && this.Due("sightings", now, TimeSpan.FromSeconds(30)))
+            if (access.IsSecurity && ((bannedAlerts && watching) || view == View.Security) && this.Due("sightings", now, TimeSpan.FromSeconds(30)))
                 jobs.Add(this.RefreshSightings);
 
             if (character is { } c && !this.presenceRefused)
@@ -241,6 +248,24 @@ public sealed partial class ApolloState : IDisposable
         await this.client.DeleteAsync($"clockReviews/{review.Id}", ct);
         this.Reviews = this.Reviews.Where(r => r.Id != review.Id).ToList();
         this.Notice = $"Marked {review.Name}'s clock as reviewed.";
+    });
+
+    /// <summary>
+    /// Takes or gives up the greeter's place. Only one person greets at a time, so a guest gets one welcome however
+    /// many managers are in the venue; taking it while someone else has it takes over from them.
+    /// </summary>
+    public void SetGreeter(bool on) => this.Act(async ct =>
+    {
+        var uid = this.Uid;
+        if (!on && this.GreeterUid != uid)
+            return;
+        await this.client.PatchAsync("night/reception", new Dictionary<string, object?>
+        {
+            ["greeterUid"] = on ? uid : "", ["greeter"] = on ? this.MyName : "", ["greeterAt"] = NowMs(),
+        }, ct);
+        this.GreeterUid = on ? uid : "";
+        this.GreeterName = on ? this.MyName : "";
+        this.Notice = on ? "Greeter mode is on: new arrivals get your welcome tell." : "Greeter mode is off.";
     });
 
     public void TakeReception() => this.Act(async ct =>
@@ -553,6 +578,7 @@ public sealed partial class ApolloState : IDisposable
         this.MyRow = null;
         this.CollabNight = false;
         this.Receptionist = "";
+        this.GreeterUid = this.GreeterName = "";
         this.Bookings = [];
         this.Buyouts = [];
         this.BuyoutList = [];
@@ -626,6 +652,8 @@ public sealed partial class ApolloState : IDisposable
         this.MyRow = row != null ? new HrRow(row) : null;
         this.CollabNight = collab?.Bool("on") == true;
         this.Receptionist = night?.Str("receptionist") ?? "";
+        this.GreeterUid = night?.Str("greeterUid") ?? "";
+        this.GreeterName = night?.Str("greeter") ?? "";
         this.Bookings = reception
             .OrderBy(r => r.Num("order") ?? 0)
             .Select(r => new Booking(r, patrons.GetValueOrDefault(r.Id) ?? "", Venue.ReceptionTotal(this.Config, r)))

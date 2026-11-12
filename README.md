@@ -36,7 +36,7 @@ two alert switches.
 | Bar | Every staff login | The menu by section: pick a drink to see its picture, price, in-game item, description and preparation macro. "Say it" announces the drink in /say; "Make it" plays the preparation macro in chat. Bar managers and owners record a bar buyout (it quotes what to collect and how the bartenders split it) and can remove one. |
 | Casino | Logins that can see Casino on the site | A dealer picks a shift and a game, goes on shift, and enters the game's profit once (a reminder comes every two hours). Each shift's gross profit and dealer list on the site are worked out from those lines, and the dealer's share shows here and in their HR total. The dealer manager and owners assign dealers, correct games and profits, and remove lines. |
 | Raffle | Owners and co-owners | Starting pot, add tickets (from target or typed, with an optional Discord name and whether the gil was collected), close and reopen, Raffle Pick (Hermes draws and announces the winner; the plugin yells it), and the announcement macro. |
-| Settings | Everyone | Sign in / out, Discord link code for Hermes, alert switches. |
+| Settings | Everyone | Sign in / out, Discord link code for Hermes, alert switches. Owners, co-owners and Front of House managers also get greeter mode: while they are on the clock and inside the venue, each new arrival gets one welcome tell with a message they can edit. |
 
 Not built yet: shouts, the dealer / reception / host macro sets, VIP lookup.
 

@@ -46,6 +46,17 @@ jobs:
           unzip -q dalamud.zip -d "$RUNNER_TEMP/dalamud"
           echo "DALAMUD_HOME=$RUNNER_TEMP/dalamud" >> "$GITHUB_ENV"
 
+      # An installed plugin's icon comes from the IconUrl in the manifest inside its own package, so write it in
+      # there (pointing at this release's tag) before the package is built.
+      - name: Put the icon address in the plugin's manifest
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          jq --arg icon "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/v$VERSION/ApolloNCC/images/icon.png" \
+             --arg repo "https://github.com/$GITHUB_REPOSITORY" \
+             '. + {IconUrl: $icon, RepoUrl: $repo}' ApolloNCC/ApolloNCC.json > manifest.json
+          mv manifest.json ApolloNCC/ApolloNCC.json
+
       - name: Build
         env:
           VERSION: ${{ inputs.version }}

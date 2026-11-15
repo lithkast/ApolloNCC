@@ -215,7 +215,8 @@ public sealed class RaffleEntry(Doc d)
     public double Order { get; } = d.Num("order") ?? 0;
 }
 
-public sealed record RaffleWinner(string Patron, string World, double Tickets, double Pot, double At, string By, string ByUid, bool Mentioned);
+/// <param name="EntryId">The winning entry (raffle/&lt;id&gt;), so its line can be picked out.</param>
+public sealed record RaffleWinner(string EntryId, string Patron, string World, double Tickets, double Pot, double At, string By, string ByUid, bool Mentioned);
 
 /// <summary>The state of tonight's raffle (night/raffle).</summary>
 public sealed class RaffleNight
@@ -228,7 +229,7 @@ public sealed class RaffleNight
         {
             string S(string k) => w.GetValueOrDefault(k) as string ?? "";
             double N(string k) => w.GetValueOrDefault(k) as double? ?? 0;
-            this.Winner = new RaffleWinner(S("patron"), S("world"), N("tickets"), N("pot"), N("at"), S("by"), S("byUid"), S("discordId").Length > 0);
+            this.Winner = new RaffleWinner(S("id"), S("patron"), S("world"), N("tickets"), N("pot"), N("at"), S("by"), S("byUid"), S("discordId").Length > 0);
         }
     }
 

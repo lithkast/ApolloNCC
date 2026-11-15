@@ -134,17 +134,30 @@ public sealed class RaffleTab(ApolloState state, MacroRunner macros)
 
     private void DrawWinner(RaffleWinner w)
     {
+        // a gold banner, so the winner can't be missed
         ImGui.Spacing();
-        ImGui.SetWindowFontScale(1.3f);
-        ImGui.TextColored(Theme.Gold, $"Winner: {Theme.PersonAt(w.Patron, w.World)}");
-        ImGui.SetWindowFontScale(1f);
-        ImGui.TextUnformatted($"{w.Tickets:0} ticket{(w.Tickets == 1 ? "" : "s")}. They take home {Venue.Gil(w.Pot)}. Drawn by {(w.By.Length > 0 ? w.By : "Hermes")}.");
+        var scale = Theme.Scale;
+        var height = (ImGui.GetTextLineHeight() * 2.6f) + (ImGui.GetTextLineHeightWithSpacing() * 1.1f) + (16 * scale);
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, Theme.Gold with { W = 0.18f });
+        ImGui.PushStyleColor(ImGuiCol.Border, Theme.Gold);
+        ImGui.PushStyleVar(ImGuiStyleVar.ChildBorderSize, 2f);
+        if (ImGui.BeginChild("winner", new System.Numerics.Vector2(-1, height), true, ImGuiWindowFlags.NoScrollbar))
+        {
+            ImGui.SetWindowFontScale(1.6f);
+            ImGui.TextColored(Theme.GoldBright, $"WINNER: {Theme.PersonAt(w.Patron, w.World)}");
+            ImGui.SetWindowFontScale(1f);
+            ImGui.TextUnformatted($"{w.Tickets:0} ticket{(w.Tickets == 1 ? "" : "s")}. They take home {Venue.Gil(w.Pot)}. Drawn by {(w.By.Length > 0 ? w.By : "Hermes")}.");
+        }
+
+        ImGui.EndChild();
+        ImGui.PopStyleVar();
+        ImGui.PopStyleColor(2);
         ImGui.BeginDisabled(macros.Running);
         if (ImGui.SmallButton("Yell the winner"))
             macros.Play([Alerts.RaffleYell(w)]);
         ImGui.EndDisabled();
         ImGui.SameLine();
-        Theme.Muted(w.Mentioned ? "Hermes mentioned them in Discord." : "No Discord name matched, so Hermes announced them by name.");
+        Theme.Muted(w.Mentioned ? "Hermes pinged them in Discord." : "No Discord name matched, so Hermes announced them to @everyone.");
     }
 
     private void DrawAdd(VenueConfig cfg)
@@ -210,9 +223,18 @@ public sealed class RaffleTab(ApolloState state, MacroRunner macros)
         {
             ImGui.PushID(e.Id);
             ImGui.TableNextRow();
+            var won = state.Raffle.Winner?.EntryId == e.Id;
+            if (won)
+                ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg1, ImGui.GetColorU32(Theme.Gold with { W = 0.35f }));
             ImGui.TableNextColumn();
             ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(e.Paid ? Theme.Text : Theme.Warn, Theme.PersonAt(e.Patron.Length > 0 ? e.Patron : "(no name)", e.World));
+            if (won)
+            {
+                ImGui.TextColored(Theme.GoldBright, "WINNER");
+                ImGui.SameLine();
+            }
+
+            ImGui.TextColored(won ? Theme.GoldBright : e.Paid ? Theme.Text : Theme.Warn, Theme.PersonAt(e.Patron.Length > 0 ? e.Patron : "(no name)", e.World));
             ImGui.TableNextColumn();
             Theme.Muted(e.Discord);
             ImGui.TableNextColumn();

@@ -129,8 +129,9 @@ public sealed class Alerts
 
         this.raffleYelledAt = w.At;
 
-        // a winner drawn a while ago (the plugin was just opened) is old news
-        if (now.ToUnixTimeMilliseconds() - w.At > 120_000)
+        // a winner drawn a while ago (the plugin was just opened) is old news; a few minutes covers a draw made
+        // with Hermes in Discord, which the plugin hears about on its next check
+        if (now.ToUnixTimeMilliseconds() - w.At > 300_000)
             return;
         try
         {

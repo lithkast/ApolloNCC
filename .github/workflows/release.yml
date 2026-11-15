@@ -58,6 +58,10 @@ jobs:
         run: |
           mkdir out
           cp ApolloNCC/bin/x64/Release/ApolloNCC/latest.zip out/latest.zip
+          # the logo goes in the package too, at images/icon.png beside the DLL, where Dalamud looks for an
+          # installed plugin's icon (the packager leaves it out)
+          (cd ApolloNCC && zip -q ../out/latest.zip images/icon.png)
+          unzip -l out/latest.zip
           cp ApolloNCC/images/icon.png out/icon.png
           .github/make-repo-json.sh ApolloNCC/bin/x64/Release/ApolloNCC/ApolloNCC.json "$GITHUB_REPOSITORY" "v$VERSION" "$NOTES" > out/repo.json
           cat out/repo.json

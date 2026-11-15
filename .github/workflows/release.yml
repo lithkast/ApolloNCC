@@ -54,11 +54,12 @@ jobs:
       - name: Write the repository listing
         env:
           NOTES: ${{ inputs.notes }}
+          VERSION: ${{ inputs.version }}
         run: |
           mkdir out
           cp ApolloNCC/bin/x64/Release/ApolloNCC/latest.zip out/latest.zip
           cp ApolloNCC/images/icon.png out/icon.png
-          .github/make-repo-json.sh ApolloNCC/bin/x64/Release/ApolloNCC/ApolloNCC.json "$GITHUB_REPOSITORY" "$NOTES" > out/repo.json
+          .github/make-repo-json.sh ApolloNCC/bin/x64/Release/ApolloNCC/ApolloNCC.json "$GITHUB_REPOSITORY" "v$VERSION" "$NOTES" > out/repo.json
           cat out/repo.json
 
       - name: Publish

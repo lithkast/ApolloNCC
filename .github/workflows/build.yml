@@ -24,8 +24,7 @@ jobs:
       - name: Build
         run: dotnet build -c Release
 
-      # Unzip this artifact into a folder and point Dalamud's Dev Plugin Locations at ApolloNCC.dll.
-      # images/icon.png beside the DLL is the logo the plugin installer shows.
+      # Each artifact is a ready-to-load folder: point Dalamud's Dev Plugin Locations at the DLL inside.
       - uses: actions/upload-artifact@v4
         with:
           name: ApolloNCC
@@ -34,4 +33,13 @@ jobs:
             ApolloNCC/bin/x64/Release/ApolloNCC.json
             ApolloNCC/bin/x64/Release/ApolloNCC.deps.json
             ApolloNCC/bin/x64/Release/images/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DanceLoop
+          path: |
+            DanceLoop/bin/x64/Release/DanceLoop.dll
+            DanceLoop/bin/x64/Release/DanceLoop.json
+            DanceLoop/bin/x64/Release/DanceLoop.deps.json
           if-no-files-found: error

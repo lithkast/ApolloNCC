@@ -1,0 +1,8 @@
+{
+  "Author": "Eris Descordia",
+  "Name": "Dance Loop",
+  "Punchline": "Keeps /dance going until you move.",
+  "Description": "Type /danceloop to keep doing the default /dance. It starts the dance again whenever it ends, and stops when you move, use another emote, or type /danceloop again.",
+  "ApplicableVersion": "any",
+  "Tags": ["emote", "dance"]
+}

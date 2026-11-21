@@ -5,6 +5,8 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ApolloNCC", "ApolloNCC\ApolloNCC.csproj", "{6F0E4D3B-6D0C-4C0B-9E55-0A3B5D0D7A11}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "DanceLoop", "DanceLoop\DanceLoop.csproj", "{3D2A8C61-0E4B-4F7A-9B1C-5D7E2A9F4C10}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -15,5 +17,9 @@ Global
 		{6F0E4D3B-6D0C-4C0B-9E55-0A3B5D0D7A11}.Debug|x64.Build.0 = Debug|x64
 		{6F0E4D3B-6D0C-4C0B-9E55-0A3B5D0D7A11}.Release|x64.ActiveCfg = Release|x64
 		{6F0E4D3B-6D0C-4C0B-9E55-0A3B5D0D7A11}.Release|x64.Build.0 = Release|x64
+		{3D2A8C61-0E4B-4F7A-9B1C-5D7E2A9F4C10}.Debug|x64.ActiveCfg = Debug|x64
+		{3D2A8C61-0E4B-4F7A-9B1C-5D7E2A9F4C10}.Debug|x64.Build.0 = Debug|x64
+		{3D2A8C61-0E4B-4F7A-9B1C-5D7E2A9F4C10}.Release|x64.ActiveCfg = Release|x64
+		{3D2A8C61-0E4B-4F7A-9B1C-5D7E2A9F4C10}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 EndGlobal

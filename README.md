@@ -72,12 +72,19 @@ dotnet build -c Release
 
 Every push builds on GitHub Actions (the `Build` workflow), as a check.
 
+## Dance Loop
+
+This repository also holds **Dance Loop** (`DanceLoop/`), a small plugin of its own with nothing
+to do with the venue: `/danceloop` keeps doing the default `/dance` until you move, use another
+emote, or type `/danceloop` again. It shows up in the plugin installer from the same repository
+link as ApolloNCC.
+
 ## Releasing an update
 
-On GitHub: Actions > **Release** > Run workflow, with a version number higher than the last
-one (e.g. `0.1.1`) and a line about what changed. It builds that version and publishes it as
-a GitHub release; the link above always serves the latest release, so staff get the update
-from the plugin installer.
+Raise `<Version>` in the plugin's `.csproj` (`ApolloNCC/ApolloNCC.csproj` or
+`DanceLoop/DanceLoop.csproj`) and push. Then on GitHub: Actions > **Release** > Run workflow,
+with a line about what changed. Every release carries both plugins; Dalamud offers an update
+for a plugin only when its version went up.
 
 ## Layout
 

@@ -4,7 +4,7 @@ using Dalamud.Bindings.ImGui;
 
 namespace ApolloNCC.Windows.Tabs;
 
-public sealed class SettingsTab(Configuration config, ApolloState state, Greeter greeter, DanceLoop dance)
+public sealed class SettingsTab(Configuration config, ApolloState state, Greeter greeter)
 {
     private string email = config.Email;
     private string password = "";
@@ -14,7 +14,6 @@ public sealed class SettingsTab(Configuration config, ApolloState state, Greeter
         this.DrawAccount();
         this.DrawDiscord();
         this.DrawGreeter();
-        this.DrawDance();
         this.DrawAlerts();
     }
 
@@ -151,16 +150,6 @@ public sealed class SettingsTab(Configuration config, ApolloState state, Greeter
         Theme.Wrapped(Theme.TextMuted,
             "It only runs inside the venue while you're on the clock, and switches off when you clock out. Each guest is " +
             "greeted once a night; staff and anyone on the blacklist are skipped, and so is everyone already inside when you switch it on.");
-    }
-
-    private void DrawDance()
-    {
-        Theme.Section("Dance loop");
-        var on = dance.Enabled;
-        if (ImGui.Checkbox("Keep doing /dance until I move", ref on))
-            dance.Toggle();
-        ImGui.TextColored(dance.Enabled ? Theme.Good : Theme.TextMuted, dance.Status);
-        Theme.Muted("Or type /apollo dance to switch it on and off. Moving or using another emote stops it.");
     }
 
     private void DrawAlerts()

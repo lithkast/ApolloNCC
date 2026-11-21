@@ -20,6 +20,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly MainWindow mainWindow;
     private readonly MacroRunner macros = new();
     private readonly Greeter greeter;
+    private readonly DanceLoop dance = new();
 
     public Plugin()
     {
@@ -27,12 +28,12 @@ public sealed class Plugin : IDalamudPlugin
         this.state = new ApolloState(this.config);
         this.alerts = new Alerts(this.config, this.state);
         this.greeter = new Greeter(this.config, this.state, this.alerts);
-        this.mainWindow = new MainWindow(this.config, this.state, this.alerts, this.macros, this.greeter);
+        this.mainWindow = new MainWindow(this.config, this.state, this.alerts, this.macros, this.greeter, this.dance);
         this.windows.AddWindow(this.mainWindow);
 
         CommandManager.AddHandler(Command, new CommandInfo(this.OnCommand)
         {
-            HelpMessage = "Open the Apollo staff window. \"/apollo settings\" opens its settings.",
+            HelpMessage = "Open the Apollo staff window. \"/apollo settings\" opens its settings; \"/apollo dance\" loops /dance until you move.",
         });
 
         PluginInterface.UiBuilder.Draw += this.windows.Draw;
@@ -51,6 +52,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
     [PluginService] internal static IToastGui ToastGui { get; private set; } = null!;
     [PluginService] internal static ITextureProvider TextureProvider { get; private set; } = null!;
+    [PluginService] internal static ICondition Condition { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     public void Dispose()
@@ -82,11 +84,14 @@ public sealed class Plugin : IDalamudPlugin
         this.alerts.Tick(now);
         this.macros.Tick(now);
         this.greeter.Tick(now);
+        this.dance.Tick(now);
     }
 
     private void OnCommand(string command, string args)
     {
-        if (args.Trim().Equals("settings", StringComparison.OrdinalIgnoreCase))
+        if (args.Trim().Equals("dance", StringComparison.OrdinalIgnoreCase))
+            this.dance.Toggle();
+        else if (args.Trim().Equals("settings", StringComparison.OrdinalIgnoreCase))
             this.OpenSettings();
         else
             this.mainWindow.Toggle();
